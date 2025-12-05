@@ -1,0 +1,225 @@
+# Phase‑field HDF5 dataset
+
+This README explains what the data‑build scripts produce, how tensors and metadata are shaped, and how to read them for modelling.
+
+## 1) What the pipeline does
+
+* Reads VTU frames for each simulation, extracts specified point‑data fields, projects nodes to a fixed 2‑D grid, and fills NaNs by nearest neighbour on GPU (CuPy), with a CPU fallback. No normalisation is done here.
+* Builds time‑ordered frames and multi‑stride input–target index pairs per simulation.
+* Computes **training‑only z‑score** statistics for:
+
+  * per‑channel image intensities,
+  * scalar thermal gradient (G) per simulation,
+  * physical (\Delta t) across paired frames.
+* Applies those training statistics to **train/val/test** splits consistently.
+* Writes one HDF5 file per split and three JSON sidecars: normalisation manifest, simulation map, and metadata.
+
+## 2) Inputs expected by the build
+
+A YAML config indicated by `PF_DATA_CONFIG` with keys (typical):
+
+```yaml
+base_data_dir: /path/to/sim_root
+output_dir:    /path/to/out
+fields:        [PHI, TEMP]      # exactly two point-data arrays
+grid:          {min_res: 128, max_res: 256}
+splits:
+  train: [simA, simB, ...]
+  val:   [simV, ...]
+  test:  [simT, ...]
+pairing: {strides: [1, 2, 4]}
+tau0: 1.0                      # scales physical time from code units
+normalization:
+  images:           {apply: true, eps: 1e-6}
+  thermal_gradient: {apply: true, eps: 1e-12}
+  delta_t:          {apply: true, eps: 1e-12}
+accelerators: {max_gpus: 1}
+runtime: {log_level: INFO, precheck_vtu: true, dry_run: false, max_runtime_minutes: 300}
+debug: {enable: false, sim: "", first_n_frames: null, split: train}
+```
+
+> Notes
+>
+> * `fields` must contain **exactly two** names present in the VTU point data. Missing fields are filled with NaN then nearest‑neighbour.
+> * Grid resolution is determined per simulation domain, bounded by `[min_res, max_res]`, and is **fixed within** a simulation but may differ **across** simulations.
+
+## 3) Outputs
+
+Directory `${output_dir}` contains:
+
+```
+normalization_config.json    # training-only z-score stats
+sim_map.json                 # {original_sim_name -> "sim_XXXX"}
+sim_meta.json                # per-simulation counts and physical params
+simulation_train.h5
+simulation_val.h5
+simulation_test.h5
+```
+
+### 3.1 `normalization_config.json`
+
+Keys:
+
+* `fields`: list of channel names, e.g. `["PHI", "TEMP"]`
+* `method_images`: `"zscore"`; `channel_mean`, `channel_std` (length = number of fields)
+* `thermal_mean`, `thermal_std` for (G)
+* `method_delta_t`: `"zscore"`; `delta_t_mean`, `delta_t_std`
+* `eps_images`, `eps_thermal`, `eps_delta_t`, `pair_strides`, `computed_from: "training_only"`
+
+### 3.2 `sim_map.json`
+
+Mapping from original simulation folder name to group id inside each HDF5.
+
+### 3.3 `sim_meta.json`
+
+For each group id: original name, `num_timesteps`, `num_pairs`, `pair_strides`, `physical_params` (`dx`, `dt`, `W0`, `thermal_gradient`, etc.).
+
+## 4) HDF5 structure and shapes
+
+Each split file stores one group per simulation, named `sim_XXXX`. Attributes on the **file** root:
+
+* `normalization_schema: "zscore"`
+* `fields: [str, ...]`
+* `channel_mean: float32[C]`, `channel_std: float32[C]`
+* `thermal_mean: float`, `thermal_std: float`
+* `delta_t_mean: float`, `delta_t_std: float`
+* `zscore_eps_images`, `zscore_eps_thermal`, `zscore_eps_delta_t`
+* `pair_strides: int32[K]`
+
+Datasets inside each **group `sim_XXXX`**:
+
+* `images`: float32 of shape **(T, C, H, W)**.
+
+  * `C = len(fields)`; ordering equals `fields` attribute.
+  * `(H, W)` are fixed per simulation but may differ across groups.
+* `times`: int of shape **(T,)**. Time indices parsed from VTU file names.
+* Pairing tensors (concatenated over all configured strides):
+
+  * `pairs_idx`: int64 **(P, 2)** with `[i, j]` frame indices into `images`/`times`.
+  * `pairs_time`: int64 **(P, 2)** with `[times[i], times[j]]`.
+  * `pairs_stride`: int32 **(P,)** with stride (s = j-i) for each pair.
+  * `pairs_dt_euler`: int64 **(P,)** with Euler‑step difference (\Delta r).
+  * `pairs_dt`: float64 **(P,)** physical time (\Delta t = \Delta r \times dt \times \tau_0).
+  * `pairs_dt_norm`: float32 **(P,)** z‑scored (\Delta t).
+* Thermal gradient series:
+
+  * `thermal_gradient_series`: float32 **(T,)**, constant per frame within a simulation.
+  * `thermal_gradient_series_norm`: float32 **(T,)**, z‑scored (G).
+
+Attributes on each **group** (per simulation):
+
+* `norm_type_images ∈ {"zscore", "none"}`, `zscore_eps_images`, `channel_mean`, `channel_std`
+* `thermal_gradient_raw: float`, `norm_type_thermal`, `zscore_eps_thermal`, `thermal_mean`, `thermal_std`
+* `norm_type_delta_t`, `zscore_eps_delta_t`, `delta_t_mean`, `delta_t_std`
+* `effective_dt: float`, `dx: float`, `W0: float`, `physical_grid_spacing: float`
+
+## 5) Reading data: minimal examples
+
+### 5.1 h5py access
+
+```python
+import json, h5py, numpy as np
+from pathlib import Path
+
+root = Path("/path/to/out")
+with open(root/"sim_map.json") as f:
+    sim_map = json.load(f)
+
+gid = sim_map["some_simulation_name"]  # e.g. "sim_0001"
+with h5py.File(root/"simulation_train.h5", "r") as h5:
+    fields = [s.decode("utf-8") for s in h5.attrs["fields"]]
+    imgs   = h5[gid]["images"]        # shape (T, C, H, W)
+    times  = h5[gid]["times"]         # shape (T,)
+    pairs  = h5[gid]["pairs_idx"]     # shape (P, 2)
+
+    i, j = pairs[0]
+    x0, x1 = imgs[i], imgs[j]          # each (C, H, W)
+
+    # invert z-score for channel c if visualising in native units
+    c = 0
+    ch_mean = h5[gid].attrs["channel_mean"][c]
+    ch_std  = h5[gid].attrs["channel_std"][c]
+    x0_native = x0[c] * ch_std + ch_mean
+```
+
+### 5.2 Torch dataset for paired samples
+
+```python
+import h5py, torch
+from torch.utils.data import Dataset
+
+class PairDataset(Dataset):
+    def __init__(self, h5_path, gid):
+        self.h5 = h5py.File(h5_path, "r")
+        self.g  = self.h5[gid]
+        self.x  = self.g["images"]          # (T, C, H, W)
+        self.p  = self.g["pairs_idx"]       # (P, 2)
+        self.dt = self.g["pairs_dt_norm"]   # (P,)
+        self.G  = self.g["thermal_gradient_series_norm"]  # (T,)
+
+    def __len__(self):
+        return self.p.shape[0]
+
+    def __getitem__(self, k):
+        i, j = self.p[k]
+        xi = torch.from_numpy(self.x[i])      # (C, H, W)
+        xj = torch.from_numpy(self.x[j])
+        dtn = torch.tensor(self.dt[k], dtype=torch.float32)
+        Gi  = torch.tensor(self.G[i], dtype=torch.float32)
+        return {"x0": xi, "x1": xj, "dt_norm": dtn, "G_norm": Gi}
+```
+
+## 6) Normalisation details
+
+* **Images**: channel‑wise z‑score using training frames only.
+  `x_norm = (x - mean_c) / max(std_c, eps_images)`.
+* **Thermal gradient** (G): z‑score using one scalar per simulation.
+* **Δt**: compute from paired time indices and `effective_dt`; then z‑score using training set mean and std.
+
+The same statistics are stored at file root and in each group to keep access local to a simulation.
+
+## 7) Pairing and strides
+
+Given configured strides `S = {s1, s2, ...}`, pairs are formed as all `(i, i+s)` with `0 ≤ i < T-s`. Arrays from different strides are concatenated. `pairs_stride[k]` records the stride used for the k‑th pair.
+
+## 8) Running the build
+
+### 8.1 Slurm example
+
+A minimal batch script:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=build_ds
+#SBATCH --account=project_XXXXXXX
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=01:00:00
+
+set -euo pipefail
+export PYTHONPATH=/path/to/src_roots
+export PF_DATA_CONFIG=/path/to/config.yaml
+python3 build_hdf5_datasets.py
+```
+
+### 8.2 Local run
+
+```bash
+export PF_DATA_CONFIG=/path/to/config.yaml
+python3 build_hdf5_datasets.py
+```
+
+## 9) Common issues
+
+* **No VTU files or all frames filtered**: the reader expects files like `output-r123.vtu`. Ensure time indices exist and the files are valid.
+* **Missing fields**: check the `fields` list in the YAML against the VTU point‑data arrays.
+* **Mismatched shapes across simulations**: expected. Spatial resolution can differ per group; keep batch sampling within a group or add resampling.
+
+## 10) Provenance summary
+
+* Spatial stage: VTU → `(T, C, H, W)` grids, pair indices, physical parameters.
+* Build stage: training‑only z‑score and HDF5/JSON outputs.
+
+---
+
+This document is designed to be pasted as a top‑level `README.md` next to the data‑build scripts and the produced HDF5/JSON artefacts.

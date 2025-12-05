@@ -1,0 +1,80 @@
+train:
+  model_family: surrogate
+
+paths:
+  h5:
+    train: /scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_train.h5
+    val:   /scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_val.h5
+    test:  /scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_test.h5
+  sim_map: /scratch/project_2008261/rapid_solidification/data/rapid_solidification/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/rapid_solidification/training/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    input_channels: [0, 1]
+    target_channels: [0, 1]
+    limit_per_group: null
+
+model:
+  backbone: uafno
+  file: /scratch/project_2008261/rapid_solidification/models/backbones/uafno_cond.py
+  class: UAFNO_PreSkip_Full
+  params:
+    n_channels: 2
+    n_classes: 2
+    cond_dim: 2
+    in_factor: 40          # or 46 if required by block divisibility  change made in UAFNo code
+    afno_depth: 8          # or 6 to match the prior script
+    afno_inp_shape: [64, 64]   # 1024/16
+
+diffusion:
+  noise_schedule: linear
+  timestep_sampler: uniform
+
+loss:
+  weight_wavelet_loss: 0.0
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: true
+  source: field           # dataset provides batch["cond"]
+  cond_dim: 2
+
+loader:
+  batch_size: 3
+  num_workers: 8
+  pin_memory: true
+  overfit_n: null
+
+trainer:
+  seed: 17
+  deterministic: false
+  device: cuda
+  epochs: 1200
+  use_val: true
+  out_dir: /scratch/project_2008261/rapid_solidification/runs
+  grad_clip: 0.0
+  resume: false
+  amp: {enabled: true, dtype: fp16}
+  channels_last: false
+  metrics: {mae: true, psnr: true}
+  early_stop: {enabled: true, patience: 100, min_delta: 0.0, split: val, mode: min}
+
+optim:
+  name: adam
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  name: plateau
+  factor: 0.1
+  patience: 44
+  threshold: 0.0          # any strict improvement
+  threshold_mode: abs
+  min_lr: 1.0e-8
+  monitor: {split: val, mode: min}

@@ -1,0 +1,42 @@
+# Quick visual config for smoke tests (few PNGs only)
+h5_paths:
+  - "/scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_train.h5"
+
+group: "auto_first"
+out_dir: "/scratch/project_2008261/rapid_solidification/results/visuals_basic/smoke"
+
+every: 200
+
+png:
+  save: true
+  every_n: 200
+
+size: 512
+cmap: "viridis"
+units:
+  Field_0: "Phase"
+  Field_1: "Cu-%"
+
+use_physical_time: true
+time:
+  unit: "auto"
+  axis_label: "time"
+
+robust_percentiles:
+  low: 5.0
+  high: 95.0
+
+phase_field:
+  channel: 0
+  vmin: -1.0
+  vmax: 1.0
+
+video:
+  enable: false
+  fps_base: 12
+  colorbar_width_px: 60
+  colorbar_ticks: 4
+
+io:
+  read_dataset: "images"
+  times_dataset: "times"

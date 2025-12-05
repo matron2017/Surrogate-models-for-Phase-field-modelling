@@ -1,0 +1,33 @@
+# Large datasets and artefacts
+data/
+results/
+runs
+runs_debug
+runs*/
+logs/
+tmp/
+
+# Containers / environments
+physics_ml/
+*.sif
+*.sqfs
+*.img
+
+# Generated files
+*.out
+*.log
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.hdf5
+*.npy
+
+# Python cache / build
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/

@@ -1,0 +1,60 @@
+# configs/visuals/rapid_solid_visuals.yaml
+# Single-simulation visuals: save every 30th PNG, video pipeline implemented but off.
+
+# Input(s): list is fine; the script picks the first existing file.
+h5_paths:
+  - "/scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_train.h5"
+  - "/scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_val.h5"
+  - "/scratch/project_2008261/rapid_solidification/data/rapid_solidification/simulation_test.h5"
+
+# Group selection: "auto_first" chooses the first group with 'images' in it.
+group: "auto_first"
+
+# Output root
+out_dir: "/scratch/project_2008261/rapid_solidification/results/visuals_basic/viz_out_single"
+
+# Processing stride (frames considered for processing)
+every: 1
+
+# PNG saving policy
+png:
+  save: true
+  every_n: 50         # save only every 30th processed frame
+
+# Render size (square)
+size: 1024
+
+# Visual style
+cmap: "viridis"
+units:
+  Field_0: "Phase"
+  Field_1: "Cu-%"
+
+# Time axis and formatting
+use_physical_time: true
+time:
+  unit: "µs"          # options: auto, s, ms, µs, ns, ps, fs
+  axis_label: "time (µs)"
+
+# Colour scaling on RAW values
+robust_percentiles:
+  low: 1.0
+  high: 99.0
+
+# Phase field fixed normalisation
+phase_field:
+  channel: 0          # index of phase field
+  vmin: -1.0
+  vmax:  1.0
+
+# Video export (implemented; disabled by default)
+video:
+  enable: true       # set to true to write MP4s per channel
+  fps_base: 12
+  colorbar_width_px: 90
+  colorbar_ticks: 5
+
+# I/O dataset names
+io:
+  read_dataset: "images"
+  times_dataset: "times"
