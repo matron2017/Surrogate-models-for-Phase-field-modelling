@@ -15,12 +15,9 @@ Focus all work inside `rapid_solidification/`. Tackle the following sequence rat
 - Extend the registries with additional backbones (SSM/SineNet), diffusion schedule variants, and adaptive selectors once the corresponding implementations exist.
 
 ## 3. Refactor the trainer into a thin orchestrator
-- Restructure `train_solidification/train.py` so it:
-  - builds datasets/dataloaders from the canonical PF datapipe (single source of truth for `batch = {"input", "target", "cond", "meta"}`),
-  - calls the registries to build the model, diffusion schedule, sampler, loss, and region selector,
-  - runs one shared training loop with a minimal branch on `model_family` (surrogate vs diffusion).
-- Keep backbone-specific or adaptive logic out of the trainer; registries should supply all specialised behaviour.
-- Wire optional region-selector hooks into the diffusion branch even if they currently no-op.
+- Trainer now pulls descriptors up front, builds models via the registry, instantiates loss builders, and prepares noise schedules + timestep samplers when `model_family == "diffusion"`.
+- Diffusion forward pass (`q_sample`, sampler-driven timesteps, region-selector hook) is wired into the training branch; validation for diffusion and the downstream MLflow logging are the remaining pieces.
+- Keep backbone-specific or adaptive logic out of the trainer; registries should continue to supply specialised behaviour.
 
 ## 4. Harden MLflow + Slurm usage
 - Read `MLFLOW_TRACKING_URI` from the environment and call `mlflow.set_tracking_uri` early; default to project storage on Puhti (e.g., `file:/scratch/$PROJECT/mlruns`).

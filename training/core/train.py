@@ -154,6 +154,33 @@ def _prepare_batch(batch: Dict[str, torch.Tensor], device, cond_cfg, use_chlast:
 
     return x, y, cond
 
+
+def _extract_schedule_value(arr: torch.Tensor, timesteps: torch.Tensor, x_shape: torch.Size) -> torch.Tensor:
+    if timesteps.dim() != 1:
+        timesteps = timesteps.view(-1)
+    out = arr.to(timesteps.device)[timesteps]
+    view_shape = (timesteps.shape[0],) + (1,) * (len(x_shape) - 1)
+    return out.view(view_shape)
+
+
+def _q_sample(x0: torch.Tensor, t: torch.Tensor, schedule) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Diffusion forward process: q(x_t | x0) = sqrt(alpha_bar_t) x0 + sqrt(1-alpha_bar_t) eps.
+    Returns x_t and the sampled eps.
+    """
+    if schedule is None:
+        raise RuntimeError("Noise schedule is required for diffusion models.")
+    alpha_bar = schedule.alpha_bar.clamp(min=1e-12, max=1.0).to(x0.device)
+    sqrt_alpha_bar = torch.sqrt(alpha_bar)
+    sqrt_om_alpha_bar = torch.sqrt(1.0 - alpha_bar)
+
+    sqrt_ab_t = _extract_schedule_value(sqrt_alpha_bar, t, x0.shape)
+    sqrt_om_ab_t = _extract_schedule_value(sqrt_om_alpha_bar, t, x0.shape)
+
+    eps = torch.randn_like(x0)
+    x_t = sqrt_ab_t * x0 + sqrt_om_ab_t * eps
+    return x_t, eps
+
 def _count_params(m: torch.nn.Module) -> Tuple[int, int]:
     total = sum(p.numel() for p in m.parameters())
     trainable = sum(p.numel() for p in m.parameters() if p.requires_grad)
@@ -640,13 +667,27 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             optim.zero_grad(set_to_none=True)
 
             with autocast(device_type="cuda", enabled=amp_enabled, dtype=amp_dtype):
-                pred = (model(x, cond) if cond is not None else model(x))
-
                 if model_family == "diffusion":
-                    raise NotImplementedError("Diffusion training loop not implemented yet.")
+                    if noise_schedule_obj is None or timestep_sampler_obj is None:
+                        raise RuntimeError("Diffusion schedule/sampler not initialised.")
+                    t = timestep_sampler_obj.sample(batch_size=x.shape[0])
+                    if not torch.is_tensor(t):
+                        t = torch.tensor(t, device=device, dtype=torch.long)
+                    else:
+                        t = t.to(device=device, dtype=torch.long)
+                    x_noisy, eps = _q_sample(y, t, noise_schedule_obj)
+                    region_info = region_selector_obj(batch, t) if region_selector_obj is not None else None
+                    if cond is not None:
+                        pred = model(x_noisy, t, cond, region_info=region_info)
+                    else:
+                        pred = model(x_noisy, t, region_info=region_info)
+                    loss = diffusion_loss_fn(pred, eps, target=y, region_info=region_info)
+                    metric_target = eps
                 else:
+                    pred = (model(x, cond) if cond is not None else model(x))
                     dataset_weight = weight if (use_weight_loss and weight is not None) else None
                     loss = surrogate_loss_fn(pred, y, weight=dataset_weight)
+                    metric_target = y
 
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Non-finite loss at epoch {epoch}")
@@ -667,18 +708,18 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
 
             # --- Metrics: always unweighted MSE/MAE for logging ---
             with torch.no_grad():
-                mse_batch = F.mse_loss(pred, y, reduction="mean")
+                mse_batch = F.mse_loss(pred, metric_target, reduction="mean")
                 if want_mae:
-                    mae_batch = F.l1_loss(pred, y, reduction="mean")
+                    mae_batch = F.l1_loss(pred, metric_target, reduction="mean")
 
-                elems = y.numel()
+                elems = metric_target.numel()
                 se_sum += float(mse_batch.detach().cpu()) * elems
                 elem_count += elems
                 if want_mae:
                     mae_sum += float(mae_batch.detach().cpu()) * elems
 
                 # per-sample unweighted MSE for gid tracking
-                ps_mse = (pred.detach() - y.detach())
+                ps_mse = (pred.detach() - metric_target.detach())
                 ps_mse = (ps_mse * ps_mse).flatten(1).mean(1).cpu().tolist()
 
             for g, k, m in zip(batch["gid"], batch["pair_index"], ps_mse):
@@ -714,20 +755,24 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
         val_gid_stats_merged = None
         with torch.inference_mode():
             if use_val_flag and val_dl is not None:
-                model.eval()
-                v_se_sum, v_mae_sum, v_elem_count = 0.0, 0.0, 0
-                v_gid_stats_local = defaultdict(lambda: [0.0, 0])
-                for batch in val_dl:
-                    x, y, cond = _prepare_batch(batch, device, cond_cfg, use_chlast)
-                    with autocast(device_type="cuda", enabled=amp_enabled, dtype=amp_dtype):
-                        pred = (model(x, cond) if cond is not None else model(x))
-                        vloss = F.mse_loss(pred, y)
-                        if want_mae:
-                            vmae = F.l1_loss(pred, y)
-                    elems = y.numel()
-                    v_se_sum += float(vloss.detach().cpu()) * elems
-                    if want_mae: v_mae_sum += float(vmae.detach().cpu()) * elems
-                    v_elem_count += elems
+                if model_family == "diffusion":
+                    # Validation for diffusion models will use dedicated evaluation scripts.
+                    pass
+                else:
+                    model.eval()
+                    v_se_sum, v_mae_sum, v_elem_count = 0.0, 0.0, 0
+                    v_gid_stats_local = defaultdict(lambda: [0.0, 0])
+                    for batch in val_dl:
+                        x, y, cond = _prepare_batch(batch, device, cond_cfg, use_chlast)
+                        with autocast(device_type="cuda", enabled=amp_enabled, dtype=amp_dtype):
+                            pred = (model(x, cond) if cond is not None else model(x))
+                            vloss = F.mse_loss(pred, y)
+                            if want_mae:
+                                vmae = F.l1_loss(pred, y)
+                        elems = y.numel()
+                        v_se_sum += float(vloss.detach().cpu()) * elems
+                        if want_mae: v_mae_sum += float(vmae.detach().cpu()) * elems
+                        v_elem_count += elems
 
                     # per-sample MSE for gid tracking (val)
                     ps_mse = (pred.detach() - y.detach())
@@ -736,21 +781,21 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
                         v_gid_stats_local[g][0] += float(m)
                         v_gid_stats_local[g][1] += 1
 
-                v_se_sum_g, v_elem_count_g = _allreduce_sum_count(device, v_se_sum, v_elem_count)
-                val_mse = v_se_sum_g / max(v_elem_count_g, 1)
-                val_rmse = math.sqrt(max(val_mse, 0.0))
-                if want_mae:
-                    v_mae_sum_g, _ = _allreduce_sum_count(device, v_mae_sum, v_elem_count)
-                    val_mae = v_mae_sum_g / max(v_elem_count_g, 1)
+                    v_se_sum_g, v_elem_count_g = _allreduce_sum_count(device, v_se_sum, v_elem_count)
+                    val_mse = v_se_sum_g / max(v_elem_count_g, 1)
+                    val_rmse = math.sqrt(max(val_mse, 0.0))
+                    if want_mae:
+                        v_mae_sum_g, _ = _allreduce_sum_count(device, v_mae_sum, v_elem_count)
+                        val_mae = v_mae_sum_g / max(v_elem_count_g, 1)
 
-                # merge per-gid validation stats
-                v_gid_stats_all = _all_gather_object(dict(v_gid_stats_local))
-                if _rank0():
-                    val_gid_stats_merged = defaultdict(lambda: [0.0, 0])
-                    for d in v_gid_stats_all:
-                        for g, (s, c) in d.items():
-                            val_gid_stats_merged[g][0] += float(s)
-                            val_gid_stats_merged[g][1] += int(c)
+                    # merge per-gid validation stats
+                    v_gid_stats_all = _all_gather_object(dict(v_gid_stats_local))
+                    if _rank0():
+                        val_gid_stats_merged = defaultdict(lambda: [0.0, 0])
+                        for d in v_gid_stats_all:
+                            for g, (s, c) in d.items():
+                                val_gid_stats_merged[g][0] += float(s)
+                                val_gid_stats_merged[g][1] += int(c)
 
         # Scheduler step
         if sched is not None:
