@@ -10,10 +10,9 @@ Focus all work inside `rapid_solidification/`. Tackle the following sequence rat
 - Ensure descriptors are plumbed to MLflow logging (params + tags). Gate the MLflow connection off `MLFLOW_TRACKING_URI` for Puhti compatibility.
 
 ## 2. Introduce lightweight registries
-- Create `models/registry.py` (or extend it if present) exposing `build_model(model_family, backbone, model_cfg)` and an internal backbone registry that maps `"unet"`, `"uafno"`, `"ssm"`, `"sinenet"`, etc. to constructors.
-- Add `models/diffusion/scheduler_registry.py` for noise schedules plus a sibling module for timestep samplers (`get_noise_schedule`, `get_timestep_sampler`). Start with `"linear"`, `"cosine"`, `"logsnr_laplace"`, `"uniform"`, `"logsnr_importance"`, and reserve `"adaptive_region"`.
-- Under `train_solidification/`, add `loss_registry.py` implementing `build_diffusion_loss` with hooks for `weight_wavelet_loss` and placeholder `edge_loss`.
-- Stub `models/adaptive/registry.py` with `build_region_selector` returning `"none"` (identity) today, leaving quadtree / edge-mask hooks for later.
+- ✅ `models/registry.py`, `models/diffusion/scheduler_registry.py`, `models/diffusion/timestep_sampler.py`, and `models/adaptive/registry.py` exist, and `training/core/train.py` now falls back to them when configs omit legacy `model.file` entries.
+- ✅ `train_solidification/loss_registry.py` provides surrogate/diffusion loss builders and is wired into the trainer; extend it with edge-aware wrappers as they land.
+- Extend the registries with additional backbones (SSM/SineNet), diffusion schedule variants, and adaptive selectors once the corresponding implementations exist.
 
 ## 3. Refactor the trainer into a thin orchestrator
 - Restructure `train_solidification/train.py` so it:

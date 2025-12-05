@@ -31,6 +31,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from models.registry import build_model as registry_build_model
+from models.diffusion.scheduler_registry import get_noise_schedule
+from models.diffusion.timestep_sampler import get_timestep_sampler
+from models.adaptive.registry import build_region_selector
+from train_solidification.loss_registry import build_surrogate_loss, build_diffusion_loss
+
 
 # ------------------- utilities -------------------
 def _load_symbol(py_path: str, symbol: str):
@@ -273,6 +283,10 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     adaptive_resolution = bool(adaptive_cfg.get("enable_adaptive_resolution", False))
     adaptive_cfg["enable_adaptive_resolution"] = adaptive_resolution
 
+    schedule_kwargs = dict(diffusion_cfg.get("schedule_kwargs", {}))
+    sampler_kwargs = dict(diffusion_cfg.get("sampler_kwargs", {}))
+    region_kwargs = dict(adaptive_cfg.get("region_kwargs", {}))
+
     if _rank0():
         desc_msg = (
             f"Descriptors → model_family={model_family}, backbone={backbone}, "
@@ -281,6 +295,7 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             f"adaptive_resolution={adaptive_resolution}"
         )
         print(desc_msg, flush=True)
+
 
     # Enforce per-rank thread count to suppress default OMP hints
     try:
@@ -359,6 +374,19 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             "Configuration sets trainer.use_wavelet_weights=True "
             "but dataset samples do not contain 'weight'."
         )
+    surrogate_loss_fn = build_surrogate_loss(loss_cfg)
+    diffusion_loss_fn = build_diffusion_loss(loss_cfg)
+
+    noise_schedule_obj = None
+    timestep_sampler_obj = None
+    region_selector_obj = None
+    if model_family == "diffusion":
+        noise_schedule_obj = get_noise_schedule(noise_schedule, **schedule_kwargs)
+        sampler_kwargs.setdefault("device", device)
+        timestep_sampler_obj = get_timestep_sampler(
+            timestep_sampler, schedule=noise_schedule_obj, **sampler_kwargs
+        )
+        region_selector_obj = build_region_selector(region_selector, **region_kwargs)
 
     # ----- conditioning -----
     cond_cfg = dict(cfg.get("conditioning", {}))
@@ -372,8 +400,13 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             assert "cond" in sample and sample["cond"].dim() == 1 and sample["cond"].numel() == cond_dim
 
     # ----- model -----
-    ModelClass = _load_symbol(cfg["model"]["file"], cfg["model"]["class"])
-    model = ModelClass(**cfg["model"].get("params", {})).to(device)
+    model_cfg = cfg["model"]
+    use_legacy_model = "file" in model_cfg and "class" in model_cfg
+    if use_legacy_model:
+        ModelClass = _load_symbol(model_cfg["file"], model_cfg["class"])
+        model = ModelClass(**model_cfg.get("params", {})).to(device)
+    else:
+        model = registry_build_model(model_family, backbone, model_cfg).to(device)
     if use_chlast and device.type == "cuda":
         model = model.to(memory_format=torch.channels_last)
 
@@ -609,13 +642,11 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             with autocast(device_type="cuda", enabled=amp_enabled, dtype=amp_dtype):
                 pred = (model(x, cond) if cond is not None else model(x))
 
-                # Loss used for optimisation: possibly weighted
-                if use_weight_loss and (weight is not None):
-                    diff = pred - y
-                    # weight expected shape [B, C_out, H, W]; broadcast works as usual
-                    loss = (weight * diff * diff).mean()
+                if model_family == "diffusion":
+                    raise NotImplementedError("Diffusion training loop not implemented yet.")
                 else:
-                    loss = F.mse_loss(pred, y)
+                    dataset_weight = weight if (use_weight_loss and weight is not None) else None
+                    loss = surrogate_loss_fn(pred, y, weight=dataset_weight)
 
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Non-finite loss at epoch {epoch}")
