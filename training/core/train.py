@@ -25,6 +25,14 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
+try:
+    import mlflow
+except Exception:
+    mlflow = None
+try:
+    import mlflow
+except Exception:
+    mlflow = None
 
 # Headless plotting
 import matplotlib
@@ -153,6 +161,17 @@ def _prepare_batch(batch: Dict[str, torch.Tensor], device, cond_cfg, use_chlast:
         x = x.contiguous(memory_format=torch.channels_last)
 
     return x, y, cond
+
+
+def _flatten_dict(prefix: str, obj: Any, out: Dict[str, Any]):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            _flatten_dict(key, v, out)
+    elif isinstance(obj, (list, tuple)):
+        out[prefix] = json.dumps(obj)
+    else:
+        out[prefix] = obj
 
 
 def _extract_schedule_value(arr: torch.Tensor, timesteps: torch.Tensor, x_shape: torch.Size) -> torch.Tensor:
@@ -314,6 +333,24 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     sampler_kwargs = dict(diffusion_cfg.get("sampler_kwargs", {}))
     region_kwargs = dict(adaptive_cfg.get("region_kwargs", {}))
 
+    # MLflow setup
+    mlflow_cfg = cfg.setdefault("mlflow", {})
+    mlflow_enabled = bool(mlflow_cfg.get("enabled", True))
+    mlflow_active = False
+    if mlflow_enabled and mlflow is not None and _rank0():
+        try:
+            tracking_uri = os.environ.get("MLFLOW_TRACKING_URI") or mlflow_cfg.get("tracking_uri")
+            if tracking_uri:
+                mlflow.set_tracking_uri(tracking_uri)
+            experiment_name = mlflow_cfg.get("experiment_name", "rapid_solidification")
+            mlflow.set_experiment(experiment_name)
+            default_run = os.environ.get("SLURM_JOB_ID")
+            run_name = mlflow_cfg.get("run_name") or default_run or f"run-{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%S')}"
+            mlflow.start_run(run_name=str(run_name))
+            mlflow_active = True
+        except Exception as e:
+            print(f"MLflow disabled: {e}", flush=True)
+
     if _rank0():
         desc_msg = (
             f"Descriptors → model_family={model_family}, backbone={backbone}, "
@@ -322,6 +359,24 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             f"adaptive_resolution={adaptive_resolution}"
         )
         print(desc_msg, flush=True)
+        if mlflow_active:
+            ml_params = {
+                "model_family": model_family,
+                "model.backbone": backbone,
+                "diffusion.noise_schedule": noise_schedule,
+                "diffusion.timestep_sampler": timestep_sampler,
+                "loss.weight_wavelet_loss": weight_wavelet_loss,
+                "adaptive.region_selector": region_selector,
+                "adaptive.enable_adaptive_resolution": adaptive_resolution,
+                "seed": seed,
+            }
+            try:
+                mlflow.log_params(ml_params)
+                cfg_flat: Dict[str, Any] = {}
+                _flatten_dict("", cfg, cfg_flat)
+                mlflow.log_params(cfg_flat)
+            except Exception as e:
+                print(f"MLflow param logging failed: {e}", flush=True)
 
 
     # Enforce per-rank thread count to suppress default OMP hints
@@ -858,6 +913,19 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
                 msg += f" val_mse={val_mse:.6f} val_rmse={val_rmse:.6f}"
             msg += f" dt={dt:.2f}s"
             print(msg, flush=True)
+            if mlflow_active:
+                metrics = {"train_rmse": train_rmse, "train_mse": train_mse}
+                if train_mae is not None:
+                    metrics["train_mae"] = train_mae
+                if val_rmse is not None:
+                    metrics["val_rmse"] = val_rmse
+                    metrics["val_mse"] = val_mse
+                if val_mae is not None:
+                    metrics["val_mae"] = val_mae
+                try:
+                    mlflow.log_metrics(metrics, step=epoch)
+                except Exception as e:
+                    print(f"MLflow metric logging failed: {e}", flush=True)
 
         # Early stopping tracking
         metric_for_es = train_mse if monitor_split_es == "train" else (val_mse if val_mse is not None else train_mse)
@@ -919,6 +987,14 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
         print(f"CSV: {csv_path}")
         print(f"Plot: {png_path}")
         print(f"Checkpoints: {run_dir}")
+        if mlflow_active:
+            try:
+                mlflow.log_artifact(str(csv_path))
+                mlflow.log_artifact(str(png_path))
+                mlflow.log_artifact(str(run_dir / "config_snapshot.yaml"))
+                mlflow.log_metrics({"best_metric": float(best_metric)})
+            except Exception as e:
+                print(f"MLflow artifact logging failed: {e}", flush=True)
 
     # ----- run-level JSON finalise (rank-0 only) -----
     if _rank0():
@@ -952,6 +1028,12 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     if _is_dist():
         _barrier_safe(local_rank)
         dist.destroy_process_group()
+
+    if mlflow_active and _rank0():
+        try:
+            mlflow.end_run()
+        except Exception as e:
+            print(f"MLflow end_run failed: {e}", flush=True)
 
 
 # ------------------- cli -------------------

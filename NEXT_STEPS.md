@@ -20,10 +20,8 @@ Focus all work inside `rapid_solidification/`. Tackle the following sequence rat
 - Keep backbone-specific or adaptive logic out of the trainer; registries should continue to supply specialised behaviour.
 
 ## 4. Harden MLflow + Slurm usage
-- Read `MLFLOW_TRACKING_URI` from the environment and call `mlflow.set_tracking_uri` early; default to project storage on Puhti (e.g., `file:/scratch/$PROJECT/mlruns`).
-- Use `config["mlflow"]["experiment_name"]` (or a fallback) and `SLURM_JOB_ID` as the run name; ensure only rank 0 interacts with MLflow in DDP.
-- Log the descriptor fields, flattened config, and the main metrics (train/val loss, `metric.val_rel_l2`, physics metrics). Save checkpoints/plots as artefacts.
-- Add the optional parent-run mechanism (store `mlflow_parent_run_id` in checkpoints, set `mlflow.parentRunId` on resume).
+- ✅ Trainer now reads `MLFLOW_TRACKING_URI`, sets/starts runs on rank 0, logs descriptor params + flattened config, streams epoch metrics, and uploads CSV/plots/checkpoints as artefacts.
+- TODO: wire in parent-run tracking for resume workflows and ensure diffusion validation metrics feed into MLflow once the eval path is in place.
 
 ## 5. Keep Optuna + Slurm orchestration consistent
 - Ensure the Optuna driver populates the new descriptor fields before launching `sbatch`.
