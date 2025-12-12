@@ -20,6 +20,7 @@ TRAIN_SCRIPT=${ROOT}/models/train/core/train.py
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=$OMP_NUM_THREADS
 export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
+export CUBLAS_WORKSPACE_CONFIG=${CUBLAS_WORKSPACE_CONFIG:-":16:8"}
 
 srun --cpu-bind=cores --hint=nomultithread \
   "$PY" "$TRAIN_SCRIPT" -c "$CFG"
