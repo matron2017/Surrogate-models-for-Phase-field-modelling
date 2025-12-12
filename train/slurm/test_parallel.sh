@@ -29,7 +29,10 @@ export NCCL_DEBUG=warn
 srun --mem=0 --cpu-bind=cores --hint=nomultithread \
   "$PY" -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=2 \
   ${ROOT}/models/train/core/parallel_solid_data.py \
-  --epochs=3 --batch-size=8 --H=1024 --W=1024 --limit-total=128 --num-workers=12
+  --epochs=3 --batch-size=8 --H=1024 --W=1024 --limit-total=128 --num-workers=12 \
+  --data-root=${ROOT}/data/rapid_solidification \
+  --pf-loader=${ROOT}/models/train/core/pf_dataloader.py \
+  --pf-class=PFPairDataset
 
 
 
