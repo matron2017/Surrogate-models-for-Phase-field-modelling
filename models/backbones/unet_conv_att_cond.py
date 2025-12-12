@@ -1,4 +1,4 @@
-# models/rapid_solidification/unet_ssa_preskip_full.py
+# models/models/unet_ssa_preskip_full.py
 # No second-person phrasing in comments
 
 from dataclasses import dataclass
@@ -9,7 +9,8 @@ import torch.nn.functional as F
 from physicsnemo.models.module import Module
 from physicsnemo.models.meta import ModelMetaData
 from .unet_parts import DoubleConv, Down, Up, OutConv
-from models.conditioning.skip_condition import ConditionalScaler
+from models.conditioning.skip_condition import ConditionalScaler, ConditionalFiLM
+from models.conditioning.mixed_padding import MixedBCConv2d
 
 
 class SpatialSelfAttention2d(nn.Module):
@@ -77,9 +78,11 @@ class UNet_SSA_PreSkip_Full(Module):
                  cond_dim: int = 2,
                  afno_inp_shape=(64, 64),
                  ssa_heads: int = 4,
-                 ssa_qk_ratio: float = 1/8):
+                 ssa_qk_ratio: float = 1/8,
+                 skip_film: bool = True):
         super().__init__(meta=UNetSSAMetaData())
         C = in_factor
+        self.skip_film = bool(skip_film)
 
         # encoder
         self.inc   = DoubleConv(n_channels, C)
@@ -88,18 +91,28 @@ class UNet_SSA_PreSkip_Full(Module):
         self.down3 = Down(4*C, 8*C)
         self.down4 = Down(8*C, 16*C)
 
-        # per-level scales (pre-skip)
-        self.scaler = ConditionalScaler(
-            cond_dim=cond_dim,
-            widths=[C, 2*C, 4*C, 8*C, 16*C],
-            hidden=128,
-            identity_init=True
-        )
+        widths = [C, 2*C, 4*C, 8*C, 16*C]
+
+        # per-level conditioning (pre-skip)
+        if self.skip_film:
+            self.skip_cond = ConditionalFiLM(
+                cond_dim=cond_dim,
+                widths=widths,
+                hidden=128,
+                identity_init=True
+            )
+        else:
+            self.skip_cond = ConditionalScaler(
+                cond_dim=cond_dim,
+                widths=widths,
+                hidden=128,
+                identity_init=True
+            )
 
         # bottleneck
         self.bot_pool = nn.MaxPool2d(2)
         self.bot_pre  = nn.Sequential(
-            nn.Conv2d(16*C, 16*C, kernel_size=3, padding=1, bias=True),
+            MixedBCConv2d(16*C, 16*C, kernel_size=3, bias=True),
             nn.GELU(),
         )
 
@@ -116,7 +129,7 @@ class UNet_SSA_PreSkip_Full(Module):
         )
 
         self.bot_post = nn.Sequential(
-            nn.Conv2d(16*C, 16*C, kernel_size=3, padding=1, bias=True),
+            MixedBCConv2d(16*C, 16*C, kernel_size=3, bias=True),
             nn.GELU(),
         )
         self.bot_up = nn.ConvTranspose2d(16*C, 16*C, kernel_size=2, stride=2)
@@ -128,16 +141,63 @@ class UNet_SSA_PreSkip_Full(Module):
         self.up4 = Up(2*C,  C,   bilinear=False)
         self.outc = OutConv(C, n_classes)
 
-        expected = (C, 2*C, 4*C, 8*C, 16*C)
-        if tuple(self.scaler.widths) != expected:
-            raise ValueError(f"ConditionalScaler widths {self.scaler.widths} do not match encoder {expected}.")
+        expected = tuple(widths)
+        if tuple(widths) != expected:
+            raise ValueError(f"Conditional widths {widths} do not match encoder {expected}.")
 
     @staticmethod
     def _apply_scale(x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         # x: (B,C,H,W), s: (B,C)
         return x * s.unsqueeze(-1).unsqueeze(-1)
 
-    def forward(self, x: torch.Tensor, cond_vec: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _apply_film(x: torch.Tensor, gamma: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
+        # x: (B,C,H,W), gamma/beta: (B,C)
+        g = gamma.unsqueeze(-1).unsqueeze(-1)
+        b = beta.unsqueeze(-1).unsqueeze(-1)
+        return x * (1 + g) + b
+
+    def _merge_cond_and_t(self, cond_vec: torch.Tensor | None, t: torch.Tensor | None) -> torch.Tensor:
+        """
+        Supports both call patterns:
+          - flow matching: forward(x, cond_with_time)
+          - diffusion:     forward(x, t, cond)  (t appended as extra scalar)
+        """
+        if t is None:
+            if cond_vec is None:
+                raise ValueError("Conditioning vector is required.")
+            return cond_vec
+
+        t = t.view(t.shape[0], -1).to(dtype=torch.float32, device=cond_vec.device if cond_vec is not None else t.device)
+        if cond_vec is None:
+            return t
+        if cond_vec.dim() != 2:
+            raise ValueError(f"Expected cond_vec shape (B, C), got {tuple(cond_vec.shape)}")
+        return torch.cat([cond_vec, t], dim=1)
+
+    def _split_args(self, cond_vec: torch.Tensor | None, args: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """
+        Disambiguate positional calls:
+          - forward(x, cond)
+          - forward(x, cond, t)
+          - forward(x, t, cond)
+        """
+        if len(args) == 0:
+            return cond_vec, None
+        if len(args) == 1:
+            extra = args[0]
+            # If cond_vec looks like timestep (1D) and extra looks like cond (2D), swap.
+            if cond_vec is not None and cond_vec.dim() <= 1 and extra.dim() == 2:
+                return extra, cond_vec
+            # Otherwise treat cond_vec as cond and extra as t.
+            return cond_vec if cond_vec is not None else extra, extra if cond_vec is not None else None
+        raise TypeError(f"UNet_SSA_PreSkip_Full.forward expected at most 3 positional args, got {2 + len(args)}")
+
+    def forward(self, x: torch.Tensor, cond_vec: torch.Tensor | None = None, *args, region_info=None) -> torch.Tensor:
+        cond_vec, timestep = self._split_args(cond_vec, args)
+
+        cond = self._merge_cond_and_t(cond_vec, timestep)
+
         # encoder
         x1 = self.inc(x)
         x2 = self.down1(x1)
@@ -146,19 +206,28 @@ class UNet_SSA_PreSkip_Full(Module):
         x5 = self.down4(x4)
 
         # pre-skip conditioning
-        s1, s2, s3, s4, s5 = self.scaler(cond_vec)
-        x1s = self._apply_scale(x1, s1)
-        x2s = self._apply_scale(x2, s2)
-        x3s = self._apply_scale(x3, s3)
-        x4s = self._apply_scale(x4, s4)
-        x5s = self._apply_scale(x5, s5)
+        if self.skip_film:
+            gammas, betas = self.skip_cond(cond)
+            (g1, g2, g3, g4, g5), (b1, b2, b3, b4, b5) = gammas, betas
+            x1s = self._apply_film(x1, g1, b1)
+            x2s = self._apply_film(x2, g2, b2)
+            x3s = self._apply_film(x3, g3, b3)
+            x4s = self._apply_film(x4, g4, b4)
+            x5s = self._apply_film(x5, g5, b5)
+        else:
+            s1, s2, s3, s4, s5 = self.skip_cond(cond)
+            x1s = self._apply_scale(x1, s1)
+            x2s = self._apply_scale(x2, s2)
+            x3s = self._apply_scale(x3, s3)
+            x4s = self._apply_scale(x4, s4)
+            x5s = self._apply_scale(x5, s5)
 
         # bottleneck
         x5s = self.bot_pool(x5s)
         x5s = self.bot_pre(x5s)
         x5s = self.ssa_bottleneck(x5s)
 
-        (sb,), = (self.bot_scaler(cond_vec),)
+        (sb,), = (self.bot_scaler(cond),)
         x5s = self._apply_scale(x5s, sb)
 
         x5s = self.bot_post(x5s)
