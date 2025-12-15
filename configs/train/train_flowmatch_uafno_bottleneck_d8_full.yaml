@@ -8,7 +8,7 @@ dataloader:
   class: PFPairDataset
   file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
 flow_matching: {sigma: 0.0}
-loader: {batch_size: 1, limit_total: 972, num_workers: 4, pin_memory: true}
+loader: {batch_size: 1, limit_total: 972, num_workers: 6, pin_memory: true}
 loss: {weight_wavelet_loss: 0.0}
 model:
   backbone: uafno
