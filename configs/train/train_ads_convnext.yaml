@@ -8,24 +8,24 @@ paths:
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/sim_map.json
 
 dataloader:
-  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  file: /scratch/project_2008261/models/models/train/core/pf_dataloader.py
   class: PFPairDataset
   args:
     input_channels: [0, 1]
     target_channels: [0, 1]
-    limit_per_group: 2
+    limit_per_group: 1
 
 model:
-  backbone: unet
-  file: /scratch/project_2008261/pf_surrogate_modelling/models/backbones/unet_conv_att_cond.py
-  class: UNet_SSA_PreSkip_Full
+  backbone: ads_convnext
   params:
-    n_channels: 2
-    n_classes: 2
-    cond_dim: 2
-    in_factor: 48
-    ssa_qk_ratio: 0.125
-    ssa_heads: 2
+    state_channels: 2   # matches input/target channels
+    cond_channels: 2    # conditioning vector (t_norm, G) broadcast to maps
+    dim: 16
+    depth: 1
+    kernel_size: 3
+    periodic: false
+    drop_path_rate: 0.0
+    noise_std: 0.0
 
 diffusion:
   noise_schedule: linear
@@ -44,20 +44,20 @@ conditioning:
   cond_dim: 2
 
 loader:
-  batch_size: 2
+  batch_size: 1
   num_workers: 2
   pin_memory: true
 
 trainer:
   seed: 1
   deterministic: true
-  device: cuda
+  device: cpu
   epochs: 1
   use_val: true
-  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/smoke_train
+  out_dir: /scratch/project_2008261/models/runs_debug/ads_convnext
   grad_clip: 0.0
   resume: false
-  amp: {enabled: true, dtype: fp16}
+  amp: {enabled: false, dtype: fp16}
   channels_last: false
   metrics: {mae: false, psnr: false}
   early_stop: {enabled: false}

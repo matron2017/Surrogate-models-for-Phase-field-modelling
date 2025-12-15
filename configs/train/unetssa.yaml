@@ -5,6 +5,7 @@ paths:
   h5:
     train: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.h5
     val:   /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_val.h5
+    test:  /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_test.h5
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/sim_map.json
 
 dataloader:
@@ -13,7 +14,7 @@ dataloader:
   args:
     input_channels: [0, 1]
     target_channels: [0, 1]
-    limit_per_group: 2
+    limit_per_group: null
 
 model:
   backbone: unet
@@ -23,9 +24,9 @@ model:
     n_channels: 2
     n_classes: 2
     cond_dim: 2
-    in_factor: 48
+    in_factor: 75
     ssa_qk_ratio: 0.125
-    ssa_heads: 2
+    ssa_heads: 4
 
 diffusion:
   noise_schedule: linear
@@ -40,34 +41,40 @@ adaptive:
 
 conditioning:
   enabled: true
-  source: field
+  source: field           # dataset provides batch["cond"]
   cond_dim: 2
 
 loader:
-  batch_size: 2
-  num_workers: 2
+  batch_size: 3
+  num_workers: 8
   pin_memory: true
+  overfit_n: null
 
 trainer:
-  seed: 1
+  seed: 17
   deterministic: true
   device: cuda
-  epochs: 1
+  epochs: 400
   use_val: true
-  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/smoke_train
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs
   grad_clip: 0.0
   resume: false
   amp: {enabled: true, dtype: fp16}
   channels_last: false
-  metrics: {mae: false, psnr: false}
-  early_stop: {enabled: false}
-  use_wavelet_weights: false
+  metrics: {mae: true, psnr: true}
+  early_stop: {enabled: true, patience: 50, min_delta: 0.0, split: val, mode: min}
 
 optim:
   name: adam
-  lr: 5.0e-4
+  lr: 1.0e-4
   weight_decay: 0.0
   betas: [0.9, 0.999]
 
 sched:
-  name: none
+  name: plateau
+  factor: 0.1
+  patience: 35
+  threshold: 0.0          # any strict improvement
+  threshold_mode: abs
+  min_lr: 1.0e-8
+  monitor: {split: val, mode: min}

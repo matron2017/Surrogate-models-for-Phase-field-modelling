@@ -64,7 +64,7 @@ echo "[step] Parallel solid-data smoke training"
   --num-workers=8 \
   --limit-total=64 \
   --limit-per-group=16 \
-  --data-root=${ROOT}/data/rapid_solidification \
+  --data-root=${ROOT}/data/deterministic \
   --pf-loader=${ROOT}/models/train/core/pf_dataloader.py \
   --pf-class=PFPairDataset
 

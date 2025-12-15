@@ -3,9 +3,17 @@ train:
 
 paths:
   h5:
-    train: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.h5
-    val:   /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_val.h5
+    train:
+      h5_path: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.h5
+      weight_h5: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.wavelet.h5
+      # weight_key: wavelet_weights   # optional, default in PFPairDataset
+
+    val:
+      h5_path: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_val.h5
+      # no weight_h5 here → validation unweighted
+
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/sim_map.json
+
 
 dataloader:
   file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
@@ -13,7 +21,8 @@ dataloader:
   args:
     input_channels: [0, 1]
     target_channels: [0, 1]
-    limit_per_group: 2
+    limit_per_group: 4
+
 
 model:
   backbone: unet
@@ -23,9 +32,10 @@ model:
     n_channels: 2
     n_classes: 2
     cond_dim: 2
-    in_factor: 48
+    in_factor: 75
     ssa_qk_ratio: 0.125
-    ssa_heads: 2
+    ssa_heads: 4
+
 
 diffusion:
   noise_schedule: linear
@@ -43,31 +53,42 @@ conditioning:
   source: field
   cond_dim: 2
 
+
 loader:
-  batch_size: 2
-  num_workers: 2
+  batch_size: 6
+  num_workers: 12
   pin_memory: true
+  overfit_n: 32    # still only applied to train_ds, val_ds is full
+
 
 trainer:
-  seed: 1
+  seed: 17
   deterministic: true
   device: cuda
-  epochs: 1
-  use_val: true
-  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/smoke_train
+  epochs: 2
+  use_val: true          # enable validation
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug
   grad_clip: 0.0
   resume: false
   amp: {enabled: true, dtype: fp16}
   channels_last: false
   metrics: {mae: false, psnr: false}
-  early_stop: {enabled: false}
-  use_wavelet_weights: false
+  early_stop: {enabled: true, patience: 8, min_delta: 0.0, split: val, mode: min}
+  use_wavelet_weights: true      # training loss uses wavelet weights
+
 
 optim:
   name: adam
-  lr: 5.0e-4
+  lr: 1.0e-3
   weight_decay: 0.0
   betas: [0.9, 0.999]
 
+
 sched:
-  name: none
+  name: plateau
+  factor: 0.1
+  patience: 17
+  threshold: 0.0
+  threshold_mode: abs
+  min_lr: 1.0e-8
+  monitor: {split: val, mode: min}

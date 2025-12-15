@@ -8,27 +8,27 @@ paths:
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
 
 dataloader:
-  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  file: /scratch/project_2008261/models/models/train/core/pf_dataloader.py
   class: PFPairDataset
   args:
     input_channels: [0, 1]
     target_channels: [0, 1]
-    limit_per_group: null   # full dataset (deterministic baseline)
+    limit_per_group: 2
 
 model:
   backbone: uafno
   params:
     n_channels: 2
     n_classes: 2
-    cond_dim: 3
-    in_factor: 72
+    cond_dim: 3            # dataset cond (t_norm, G) + time appended by trainer
+    in_factor: 72          # keep encoder moderate
     afno_inp_shape: [64, 64]
-    afno_depth: 8
-    num_blocks: 24
+    afno_depth: 7          # concentrate extra capacity in AFNO
+    num_blocks: 24         # divides 16*in_factor (1152) cleanly
     afno_mlp_ratio: 6.0
 
 flow_matching:
-  sigma: 0.0
+  sigma: 0.0               # deterministic rectified path
 
 loss:
   weight_wavelet_loss: 0.0
@@ -43,8 +43,8 @@ conditioning:
   cond_dim: 2
 
 loader:
-  batch_size: 1           # safer for full-data stability
-  num_workers: 4
+  batch_size: 1            # safer for the larger AFNO bottleneck
+  num_workers: 2
   pin_memory: true
 
 trainer:
@@ -53,10 +53,10 @@ trainer:
   device: cuda
   epochs: 1
   use_val: true
-  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_uafno_bottleneck_d8_full
-  grad_clip: 1.0
+  out_dir: /scratch/project_2008261/models/runs_debug/flowmatch_uafno_bottleneck
+  grad_clip: 0.0
   resume: false
-  amp: {enabled: false, dtype: fp16}
+  amp: {enabled: true, dtype: fp16}
   channels_last: false
   metrics: {mae: false, psnr: false}
   early_stop: {enabled: false}
@@ -64,7 +64,7 @@ trainer:
 
 optim:
   name: adam
-  lr: 1.0e-4
+  lr: 5.0e-4
   weight_decay: 0.0
   betas: [0.9, 0.999]
 

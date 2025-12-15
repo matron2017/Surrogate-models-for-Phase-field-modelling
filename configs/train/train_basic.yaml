@@ -1,0 +1,71 @@
+seed: 1234
+
+model:
+  n_channels: 2
+  n_classes: 2
+  in_factor: 32
+  cond_dim: 2
+  afno_inp_shape: [64, 64]
+  afno_depth: 8
+  afno_mlp_ratio: 8.0
+
+data:
+  train:
+    module_path: "/scratch/project_2008261/pf_surrogate_modelling/datapipes/h5_dataset_solid.py"
+    module_name: "h5_dataset_solid"
+    class: "RSPairsDataset"
+    args:
+      path: "/scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.h5"
+      groups: ["sim_0001","sim_0003"]   # tiny fixed set
+      use_seconds: true                  # Δt in seconds if effective_dt>0
+      use_zscore_G: false                # raw G as conditioner
+      denormalise: false
+      enforce_monotonic_time: true
+  val:
+    module_path: "/scratch/project_2008261/pf_surrogate_modelling/datapipes/h5_dataset_solid.py"
+    module_name: "h5_dataset_solid"
+    class: "RSPairsDataset"
+    args:
+      path: "/scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_val.h5"
+      groups: ["sim_0001","sim_0003"]
+      use_seconds: true
+      use_zscore_G: false
+      denormalise: false
+      enforce_monotonic_time: true
+
+dataloader:
+  batch_size: 2
+  num_workers: 0
+  pin_memory: true
+
+optim:
+  lr: 1.0e-3
+  betas: [0.9, 0.999]
+  weight_decay: 0.1
+  eps: 1.0e-8
+
+scheduler:
+  name: none
+  warmup_epochs: 0
+
+accelerator:
+  amp: false             # set true after the check
+  cuda_graph_warmup: 8
+
+trainer:
+  num_epochs: 50
+  log_every: 1
+  out_dir: "/scratch/project_2008261/pf_surrogate_modelling/results/model_training/uafno"
+  deterministic: true
+
+distributed:
+  broadcast_buffers: false
+  find_unused_parameters: false
+
+debug:
+  overfit_one_batch: true
+  overfit_iters: 300
+
+logging:
+  mlflow: { enable: false }
+  wandb:  { enable: false }

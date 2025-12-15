@@ -1,0 +1,81 @@
+train:
+  model_family: surrogate
+
+paths:
+  h5:
+    train:
+      h5_path: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_train.h5
+      weight_h5: /scratch/project_2008261/solidification_modelling/data/rapid_solidification/simulation_train_a10000b50000.wavelet.h5
+    val:
+      h5_path: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_val.h5
+    test:  /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/simulation_test.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/deterministic/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    input_channels: [0, 1]
+    target_channels: [0, 1]
+    limit_per_group: null
+
+model:
+  backbone: unet
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/backbones/unet_conv_att_cond.py
+  class: UNet_SSA_PreSkip_Full
+  params:
+    n_channels: 2
+    n_classes: 2
+    cond_dim: 2
+    in_factor: 120
+    ssa_qk_ratio: 0.125
+    ssa_heads: 4
+
+loss:
+  weight_wavelet_loss: 0.0
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: true
+  source: field
+  cond_dim: 2
+
+loader:
+  batch_size: 3
+  num_workers: 8
+  pin_memory: true
+  overfit_n: null
+
+trainer:
+  seed: 17
+  deterministic: true
+  device: cuda
+  epochs: 400
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs
+  # Note: deterministic dataset root set to /scratch/project_2008261/pf_surrogate_modelling/data/deterministic
+  grad_clip: 0.0
+  resume: false
+  amp: {enabled: true, dtype: fp16}
+  channels_last: false
+  metrics: {mae: true, psnr: true}
+  early_stop: {enabled: true, patience: 50, min_delta: 0.0, split: val, mode: min}
+  use_wavelet_weights: true
+
+optim:
+  name: adam
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  name: plateau
+  factor: 0.1
+  patience: 35
+  threshold: 0.0
+  threshold_mode: abs
+  min_lr: 1.0e-8
+  monitor: {split: val, mode: min}
