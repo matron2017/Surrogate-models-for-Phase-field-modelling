@@ -1,72 +1,49 @@
-train:
-  model_family: flow_matching
-
-paths:
-  h5:
-    train: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_train.h5
-    val:   /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_val.h5
-  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
-
+adaptive: {enable_adaptive_resolution: false, region_selector: none}
+conditioning: {cond_dim: 2, enabled: true, source: field}
 dataloader:
-  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
-  class: PFPairDataset
   args:
     input_channels: [0, 1]
+    limit_per_group: null
     target_channels: [0, 1]
-    limit_per_group: null   # full dataset (deterministic baseline)
-
+  class: PFPairDataset
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+flow_matching: {sigma: 0.0}
+loader: {batch_size: 1, limit_total: 972, num_workers: 4, pin_memory: true}
+loss: {weight_wavelet_loss: 0.0}
 model:
   backbone: uafno
   params:
-    n_channels: 2
-    n_classes: 2
+    afno_depth: 8
+    afno_inp_shape: [64, 64]
+    afno_mlp_ratio: 6.0
     cond_dim: 3
     in_factor: 72
-    afno_inp_shape: [64, 64]
-    afno_depth: 8
+    n_channels: 2
+    n_classes: 2
     num_blocks: 24
-    afno_mlp_ratio: 6.0
-
-flow_matching:
-  sigma: 0.0
-
-loss:
-  weight_wavelet_loss: 0.0
-
-adaptive:
-  region_selector: none
-  enable_adaptive_resolution: false
-
-conditioning:
-  enabled: true
-  source: field
-  cond_dim: 2
-
-loader:
-  batch_size: 1           # safer for full-data stability
-  num_workers: 4
-  pin_memory: true
-
+optim:
+  betas: [0.9, 0.999]
+  lr: 0.0001
+  name: adam
+  weight_decay: 0.0
+paths:
+  h5: {train: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_train.h5,
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_val.h5}
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+sched: {name: none}
+train: {model_family: flow_matching}
 trainer:
-  seed: 1
+  amp: {dtype: fp16, enabled: false}
+  channels_last: false
   deterministic: true
   device: cuda
-  epochs: 1
-  use_val: true
-  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_uafno_bottleneck_d8_full
-  grad_clip: 1.0
-  resume: false
-  amp: {enabled: false, dtype: fp16}
-  channels_last: false
-  metrics: {mae: false, psnr: false}
   early_stop: {enabled: false}
+  epochs: 1
+  grad_clip: 1.0
+  log_interval: 50
+  metrics: {mae: false, psnr: false}
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_uafno_bottleneck_d8_full
+  resume: false
+  seed: 1
+  use_val: true
   use_wavelet_weights: false
-
-optim:
-  name: adam
-  lr: 1.0e-4
-  weight_decay: 0.0
-  betas: [0.9, 0.999]
-
-sched:
-  name: none
