@@ -285,7 +285,7 @@ def main():
             pass
 
     # Shared operators from loss_functions.py
-    LOSS_PATH = "/scratch/project_2008261/rapid_solidification/training/core/loss_functions.py"
+    LOSS_PATH = "/scratch/project_2008261/rapid_solidification/models/train/core/loss_functions.py"
     ops = _import_module_from_path(LOSS_PATH, name="loss_functions_ext")
 
     if not hasattr(ops, "rmse"):

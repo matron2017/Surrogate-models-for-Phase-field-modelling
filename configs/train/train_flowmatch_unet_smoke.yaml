@@ -8,7 +8,7 @@ paths:
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
 
 dataloader:
-  file: /scratch/project_2008261/models/models/train/core/pf_dataloader.py
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
   class: PFPairDataset
   args:
     input_channels: [0, 1]
@@ -16,14 +16,20 @@ dataloader:
     limit_per_group: 2
 
 model:
-  backbone: unet
+  backbone: unet_film_attn
   params:
-    n_channels: 2
-    n_classes: 2
-    cond_dim: 3       # dataset cond (t_norm, G) + time appended by trainer
-    in_factor: 48
-    ssa_heads: 2
-    ssa_qk_ratio: 0.125
+    in_channels: 2
+    out_channels: 2
+    cond_dim: 2       # physical scalars (t_phys_norm, G_norm); generative time passed separately
+    channels: [48, 96, 192, 256, 384, 512, 512]
+    num_blocks: [2, 2, 2, 2, 2, 2, 2]
+    bottleneck_blocks: [2, 2]
+    attn_heads: 4
+    film_dim: 384
+    time_emb_dim: 128
+    padding: mixed
+    skip_film: true
+    use_time: true
 
 flow_matching:
   sigma: 0.0          # deterministic rectified path
@@ -51,7 +57,7 @@ trainer:
   device: cuda
   epochs: 1
   use_val: true
-  out_dir: /scratch/project_2008261/models/runs_debug/flowmatch_unet
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_unet
   grad_clip: 0.0
   resume: false
   amp: {enabled: true, dtype: fp16}

@@ -8,7 +8,8 @@
 #SBATCH --gres=gpu:v100:3
 #SBATCH --mem=8G
 #SBATCH --time=0:14:00
-#SBATCH --output=%x_%j.out
+#SBATCH --output=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.out
+#SBATCH --error=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.err
 
 set -euxo pipefail
 
@@ -20,7 +21,7 @@ export MPLBACKEND=Agg
 export PYTHONUNBUFFERED=1
 export GLOO_SOCKET_IFNAME=lo
 
-PY="/scratch/project_2008261/rapid_solidification/physics_ml/bin/python3.11"
+PY="/scratch/project_2008261/physics_ml/bin/python3.11"
 SCRIPT="/scratch/project_2008261/rapid_solidification/visuals/basic/pf_eval_grids_individual_minmetrics.py"
 CFG="/scratch/project_2008261/rapid_solidification/runs/UAFNO_PreSkip_Full/config_snapshot.yaml"
 CKPT="/scratch/project_2008261/rapid_solidification/runs/UAFNO_PreSkip_Full/checkpoint.best.pth"

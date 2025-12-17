@@ -6,7 +6,7 @@ dataloader:
     limit_per_group: 2
     target_channels: [0, 1]
   class: PFPairDataset
-  file: /scratch/project_2008261/models/models/train/core/pf_dataloader.py
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
 flow_matching: {sigma: 0.0}
 loader: {batch_size: 2, limit_total: 324, num_workers: 2, pin_memory: true}
 loss: {weight_wavelet_loss: 0.0}
@@ -41,7 +41,7 @@ trainer:
   grad_clip: 0.0
   log_interval: 50
   metrics: {mae: false, psnr: false}
-  out_dir: /scratch/project_2008261/models/runs_debug/flowmatch_uafno
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_uafno
   resume: false
   seed: 1
   use_val: true

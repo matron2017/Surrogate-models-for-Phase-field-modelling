@@ -1,0 +1,47 @@
+{
+  "data": {
+    "h5_path": "/scratch/project_2008261/rapid_solidification/experiments/diffusion_prototype/data/placeholder_smoke.h5",
+    "dataset_key": "images",
+    "scalar_key": "scalars",
+    "pair_stride": 1,
+    "batch_size": 1,
+    "num_workers": 2,
+    "pin_memory": true
+  },
+  "vae": {
+    "in_channels": 2,
+    "out_channels": 2,
+    "latent_channels": 4,
+    "sample_size": 1024,
+    "block_out_channels": [256, 512, 512, 512],
+    "down_block_types": ["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
+    "up_block_types": ["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"]
+  },
+  "unet": {
+    "sample_size": 128,
+    "in_channels": 10,
+    "out_channels": 4,
+    "block_out_channels": [320, 640, 960, 960],
+    "num_res_blocks": 3,
+    "attention_head_dim": 8,
+    "down_block_types": ["DownBlock2D", "DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"],
+    "up_block_types": ["AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D", "UpBlock2D"]
+  },
+  "scheduler": {
+    "num_train_timesteps": 1000,
+    "beta_start": 0.0001,
+    "beta_end": 0.02,
+    "beta_schedule": "linear"
+  },
+  "training": {
+    "epochs": 1,
+    "lr": 0.0002,
+    "device": "cuda",
+    "log_every": 25,
+    "vae_checkpoint": "/scratch/project_2008261/rapid_solidification/runs_debug/diffusers/vae/vae_epoch001.pt",
+    "out_dir": "/scratch/project_2008261/rapid_solidification/runs_debug/diffusers/diffusion"
+  },
+  "loss": {
+    "lambda_wavelet": 0.0
+  }
+}

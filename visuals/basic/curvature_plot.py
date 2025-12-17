@@ -58,7 +58,45 @@ def _collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 def _ensure_dir(p: Path) -> Path:
-    p.mkdir(parents=True, exist_ok=True); return p
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _pair_stride(grp, idx: int) -> int:
+    if "pairs_stride" in grp:
+        return int(grp["pairs_stride"][idx])
+    if "pairs_dt_euler" in grp:
+        return int(grp["pairs_dt_euler"][idx])
+    i, j = grp["pairs_idx"][idx]
+    return int(j - i)
+
+
+def _pair_time_values(grp, idx: int) -> Tuple[float, float]:
+    i, j = grp["pairs_idx"][idx]
+    dt_phys = float("nan")
+    z_dt = float("nan")
+    if "pairs_dt" in grp:
+        dt_phys = float(grp["pairs_dt"][idx])
+    elif "time_phys" in grp:
+        arr = grp["time_phys"]
+        dt_phys = float(arr[j] - arr[i])
+    elif "pairs_time" in grp:
+        arr = grp["pairs_time"]
+        eff_dt = float(grp.attrs.get("effective_dt", grp.file.attrs.get("effective_dt", 1.0)))
+        dt_phys = float((arr[idx][1] - arr[idx][0]) * eff_dt)
+    if "pairs_dt_norm" in grp:
+        z_dt = float(grp["pairs_dt_norm"][idx])
+    elif "time_phys_norm" in grp:
+        arr = grp["time_phys_norm"]
+        z_dt = float(arr[j] - arr[i])
+    elif "time_phys" in grp:
+        arr = grp["time_phys"]
+        denom = grp.attrs.get("time_std", grp.file.attrs.get("time_std", 1.0))
+        eps_time = grp.attrs.get("zscore_eps_time", grp.file.attrs.get("zscore_eps_time", 1e-12))
+        denom = denom if isinstance(denom, (int, float)) and denom > 0 else eps_time
+        denom = denom if denom and denom > 0 else 1.0
+        z_dt = float((arr[j] - arr[i]) / denom)
+    return dt_phys, z_dt
 
 def _percentiles(arrs: List[np.ndarray], lo=2.0, hi=98.0) -> Tuple[float, float]:
     vec = np.concatenate([a.ravel() for a in arrs]) if arrs else np.array([0.0], dtype=np.float64)
@@ -271,12 +309,11 @@ def main():
                     continue
 
                 grp = h5[gid_i]
-                stride_i = int(grp["pairs_stride"][k_i]) if "pairs_stride" in grp else int(grp.get("pairs_dt_euler",[1])[k_i])
+                stride_i = _pair_stride(grp, k_i)
                 if args.require_stride1 and stride_i != 1:
                     continue
 
-                dt_phys = float(grp["pairs_dt"][k_i]) if "pairs_dt" in grp else float("nan")
-                z_dt = float(grp["pairs_dt_norm"][k_i]) if "pairs_dt_norm" in grp else float("nan")
+                dt_phys, z_dt = _pair_time_values(grp, k_i)
                 G_raw = float(grp.attrs.get("thermal_gradient_raw", float("nan")))
                 muG = float(grp.attrs.get("thermal_mean", float("nan")))
                 sdG = float(grp.attrs.get("thermal_std", float("nan")))

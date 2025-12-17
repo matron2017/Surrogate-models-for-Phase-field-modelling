@@ -4,7 +4,11 @@ results/
 runs
 runs_debug
 runs*/
-logs/
+logs/*
+!logs/.gitkeep
+!logs/slurm/
+logs/slurm/*
+!logs/slurm/.gitkeep
 tmp/
 
 # Containers / environments
@@ -22,6 +26,7 @@ physics_ml/
 *.h5
 *.hdf5
 *.npy
+slurm-*.out
 
 # Python cache / build
 __pycache__/

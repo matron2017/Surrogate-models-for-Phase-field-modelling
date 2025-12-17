@@ -1,0 +1,79 @@
+train:
+  model_family: flow_matching
+
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_train.h5
+    val:   /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_val.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    input_channels: [0, 1]
+    target_channels: [0, 1]
+    limit_per_group: 5
+
+model:
+  backbone: unet_film_attn
+  params:
+    in_channels: 2
+    out_channels: 2
+    cond_dim: 2
+    channels: [80, 160, 256, 384, 512, 640, 832]
+    num_blocks: [2, 2, 2, 2, 2, 2, 2]
+    bottleneck_blocks: [2, 2]
+    attn_heads: 8
+    film_dim: 832
+    time_emb_dim: 160
+    padding: mixed
+    skip_film: true
+    use_time: true
+    film_mode: additive
+    dropout: 0.0
+
+flow_matching:
+  sigma: 0.0
+
+loss:
+  weight_wavelet_loss: 0.0
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: true
+  source: field
+  cond_dim: 2
+
+loader:
+  batch_size: 1
+  num_workers: 0
+  pin_memory: false
+  limit_total: 64
+
+trainer:
+  seed: 1
+  deterministic: true
+  device: cuda
+  epochs: 2
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_unet_full_debug
+  grad_clip: 1.0
+  resume: false
+  amp: {enabled: true, dtype: fp16}
+  channels_last: false
+  metrics: {mae: false, psnr: false}
+  early_stop: {enabled: true, patience: 2, split: val, mode: min}
+  use_wavelet_weights: false
+
+optim:
+  name: adam
+  lr: 3.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine

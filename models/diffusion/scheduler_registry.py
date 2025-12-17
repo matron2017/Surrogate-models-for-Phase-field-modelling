@@ -11,6 +11,7 @@ import torch
 @dataclass
 class NoiseSchedule:
     betas: torch.Tensor
+    kind: str = "vp"
 
     def __post_init__(self) -> None:
         if self.betas.dim() != 1:
@@ -28,6 +29,24 @@ class NoiseSchedule:
     @property
     def timesteps(self) -> int:
         return self.betas.numel()
+
+
+class VESchedule:
+    """Variance-exploding noise schedule σ_t (no betas/alphas)."""
+
+    def __init__(self, sigmas: torch.Tensor):
+        if sigmas.dim() != 1:
+            raise ValueError("sigmas must be 1-D.")
+        if torch.any(sigmas <= 0):
+            raise ValueError("sigmas must be > 0 for VE schedule.")
+        self.sigmas = sigmas
+        self.kind = "ve"
+        # For importance sampling compatibility
+        self.log_snr = -2.0 * torch.log(self.sigmas)
+
+    @property
+    def timesteps(self) -> int:
+        return self.sigmas.numel()
 
 
 def _linear_betas(timesteps: int, beta_start: float, beta_end: float) -> torch.Tensor:
@@ -70,11 +89,25 @@ def LearnedNoiseSchedule(beta_series: Sequence[float]) -> NoiseSchedule:
     return NoiseSchedule(betas)
 
 
+def ExponentialVESchedule(
+    timesteps: int = 1000, sigma_min: float = 0.01, sigma_max: float = 50.0
+) -> VESchedule:
+    """
+    σ_t grows exponentially from sigma_min to sigma_max over timesteps.
+    Matches the VE-style exponential schedule used in GenCFD/RecFlow comparisons.
+    """
+    t = torch.linspace(0.0, 1.0, timesteps, dtype=torch.float32)
+    log_sig = torch.log(torch.tensor(sigma_min)) + t * (torch.log(torch.tensor(sigma_max)) - torch.log(torch.tensor(sigma_min)))
+    sigmas = torch.exp(log_sig)
+    return VESchedule(sigmas)
+
+
 _SCHEDULE_REGISTRY: Dict[str, callable] = {
     "linear": LinearNoiseSchedule,
     "cosine": CosineNoiseSchedule,
     "logsnr_laplace": LogSNRLaplaceSchedule,
     "learned": LearnedNoiseSchedule,
+    "exponential_ve": ExponentialVESchedule,
 }
 
 

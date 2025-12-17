@@ -25,6 +25,48 @@ from pathlib import Path
 
 print("ARGV:", " ".join(sys.argv), flush=True)
 
+
+def _pair_stride(grp, idx: int) -> int:
+    if "pairs_stride" in grp:
+        return int(grp["pairs_stride"][idx])
+    if "pairs_dt_euler" in grp:
+        return int(grp["pairs_dt_euler"][idx])
+    i, j = grp["pairs_idx"][idx]
+    return int(j - i)
+
+
+def _pair_time_values(grp, idx: int) -> Tuple[float, float]:
+    i, j = grp["pairs_idx"][idx]
+    eff_dt = float(grp.attrs.get("effective_dt", grp.file.attrs.get("effective_dt", 1.0)))
+    eps_time = float(grp.attrs.get("zscore_eps_time", grp.file.attrs.get("zscore_eps_time", 1e-12)))
+
+    if "time_phys" in grp:
+        t_abs = float(grp["time_phys"][j])
+        t_mean = float(grp.attrs.get("time_mean", grp.file.attrs.get("time_mean", t_abs)))
+        t_std = float(grp.attrs.get("time_std", grp.file.attrs.get("time_std", 1.0)))
+    elif "pairs_time" in grp:
+        arr = grp["pairs_time"]
+        t_abs = float(arr[idx][1] * eff_dt)
+        if "times" in grp:
+            t_series = grp["times"][:].astype("float64") * eff_dt
+            t_mean = float(t_series.mean())
+            t_std = float(t_series.std())
+        else:
+            t_mean = float(grp.attrs.get("time_mean", grp.file.attrs.get("time_mean", t_abs)))
+            t_std = float(grp.attrs.get("time_std", grp.file.attrs.get("time_std", 1.0)))
+    elif "times" in grp:
+        t_series = grp["times"][:].astype("float64") * eff_dt
+        t_abs = float(t_series[j])
+        t_mean = float(t_series.mean())
+        t_std = float(t_series.std())
+    else:
+        raise KeyError("Expected absolute time datasets ('time_phys', 'pairs_time', or 'times').")
+
+    denom = t_std if isinstance(t_std, (int, float)) and t_std > 0 else eps_time
+    denom = denom if denom and denom > 0 else 1.0
+    z_t = float((t_abs - t_mean) / denom)
+    return t_abs, z_t
+
 # Replace with the real Namespace variable
 ns = args
 
@@ -352,15 +394,14 @@ def main():
                 k = int(batch.get("pair_index", [i])[i]) if "pair_index" in batch else i
 
                 grp = h5[str(gid)]
-                stride_i = int(grp["pairs_stride"][k]) if "pairs_stride" in grp else int(grp.get("pairs_dt_euler",[1])[k])
+                stride_i = _pair_stride(grp, k)
                 if args.require_stride1 and stride_i != 1:
                     continue
                 if k not in k_set:
                     continue
 
                 # Per-pair metadata
-                dt_phys = float(grp["pairs_dt"][k]) if "pairs_dt" in grp else float("nan")
-                z_dt = float(grp["pairs_dt_norm"][k]) if "pairs_dt_norm" in grp else float("nan")
+                t_abs, z_t = _pair_time_values(grp, k)
                 G_raw = float(grp.attrs.get("thermal_gradient_raw", float("nan")))
                 muG = float(grp.attrs.get("thermal_mean", float("nan")))
                 sdG = float(grp.attrs.get("thermal_std", float("nan")))
@@ -371,7 +412,7 @@ def main():
                     "meta": {
                         "gid": gid, "pair_index": k,
                         "t_from": k, "t_to": k + stride_i, "stride": stride_i,
-                        "dt_phys": dt_phys, "z_dt": z_dt, "G_raw": G_raw, "z_G": z_G,
+                        "time_phys": t_abs, "z_time": z_t, "G_raw": G_raw, "z_G": z_G,
                     },
                 }
                 examples.append(rec)
@@ -441,8 +482,8 @@ def main():
     for idx, rec in enumerate(examples):
         gid = rec["meta"]["gid"]; tf = rec["meta"]["t_from"]; tt = rec["meta"]["t_to"]
         k = rec["meta"]["pair_index"]; s = rec["meta"]["stride"]
-        dt = rec["meta"]["dt_phys"]; zdt = rec["meta"]["z_dt"]; G = rec["meta"]["G_raw"]; zG = rec["meta"]["z_G"]
-        meta_str = f"gid={gid}  k={k}  t{tf}->{tt}  stride={s}  dt={dt:.3e}  zdt={zdt:.3f}  G={G:.3e}  zG={zG:.3f}"
+        t_abs = rec["meta"]["time_phys"]; zt = rec["meta"]["z_time"]; G = rec["meta"]["G_raw"]; zG = rec["meta"]["z_G"]
+        meta_str = f"gid={gid}  k={k}  t{tf}->{tt}  stride={s}  t_abs={t_abs:.3e}  zt={zt:.3f}  G={G:.3e}  zG={zG:.3f}"
         for c in range(C):
             _save_single_grid(
                 rec["x"][c], phys_vlims[c],

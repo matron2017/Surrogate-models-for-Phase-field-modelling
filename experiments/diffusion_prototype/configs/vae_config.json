@@ -1,0 +1,30 @@
+{
+  "data": {
+    "h5_path": "/scratch/project_2008261/rapid_solidification/experiments/diffusion_prototype/data/placeholder_smoke.h5",
+    "dataset_key": "images",
+    "scalar_key": "scalars",
+    "batch_size": 1,
+    "num_workers": 2,
+    "pin_memory": true
+  },
+  "vae": {
+    "in_channels": 2,
+    "out_channels": 2,
+    "latent_channels": 4,
+    "sample_size": 1024,
+    "block_out_channels": [256, 512, 512, 512],
+    "down_block_types": ["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
+    "up_block_types": ["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"]
+  },
+  "training": {
+    "epochs": 1,
+    "lr": 0.0003,
+    "device": "cuda",
+    "log_every": 10,
+    "out_dir": "/scratch/project_2008261/rapid_solidification/runs_debug/diffusers/vae"
+  },
+  "loss": {
+    "lambda_wavelet": 0.1,
+    "lambda_kl": 0.0001
+  }
+}

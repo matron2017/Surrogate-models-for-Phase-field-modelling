@@ -66,6 +66,48 @@ def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
     return p
 
+
+def _pair_stride(grp, pair_idx: int) -> int:
+    if "pairs_stride" in grp:
+        return int(grp["pairs_stride"][pair_idx])
+    if "pairs_dt_euler" in grp:
+        return int(grp["pairs_dt_euler"][pair_idx])
+    i, j = grp["pairs_idx"][pair_idx]
+    return int(j - i)
+
+
+def _pair_time_features(grp, pair_idx: int) -> Tuple[float, float]:
+    i, j = grp["pairs_idx"][pair_idx]
+    eff_dt = float(grp.attrs.get("effective_dt", grp.file.attrs.get("effective_dt", 1.0)))
+    eps_time = float(grp.attrs.get("zscore_eps_time", grp.file.attrs.get("zscore_eps_time", 1e-12)))
+
+    if "time_phys" in grp:
+        t_abs = float(grp["time_phys"][j])
+        t_mean = float(grp.attrs.get("time_mean", grp.file.attrs.get("time_mean", t_abs)))
+        t_std = float(grp.attrs.get("time_std", grp.file.attrs.get("time_std", 1.0)))
+    elif "pairs_time" in grp:
+        arr = grp["pairs_time"]
+        t_abs = float(arr[pair_idx][1] * eff_dt)
+        if "times" in grp:
+            t_series = grp["times"][:].astype("float64") * eff_dt
+            t_mean = float(t_series.mean())
+            t_std = float(t_series.std())
+        else:
+            t_mean = float(grp.attrs.get("time_mean", grp.file.attrs.get("time_mean", t_abs)))
+            t_std = float(grp.attrs.get("time_std", grp.file.attrs.get("time_std", 1.0)))
+    elif "times" in grp:
+        t_series = grp["times"][:].astype("float64") * eff_dt
+        t_abs = float(t_series[j])
+        t_mean = float(t_series.mean())
+        t_std = float(t_series.std())
+    else:
+        raise KeyError("Expected absolute time datasets ('time_phys', 'pairs_time', or 'times').")
+
+    denom = t_std if isinstance(t_std, (int, float)) and t_std > 0 else eps_time
+    denom = denom if denom and denom > 0 else 1.0
+    z_t = float((t_abs - t_mean) / denom)
+    return t_abs, z_t
+
 def _percentiles(arrs: List[np.ndarray], lo=2.0, hi=98.0) -> Tuple[float, float]:
     vec = np.concatenate([a.ravel() for a in arrs]) if arrs else np.array([0.0])
     return float(np.percentile(vec, lo)), float(np.percentile(vec, hi))
@@ -207,7 +249,7 @@ def _render_panel_absdiff(sample_pack: Dict[str, Any],
     meta = sample_pack["meta"]
     fig.suptitle(
         f"ABS-DIFF • ch={ch}  gid={meta['gid']}  pair_index={meta['pair_index']}  stride={meta['stride']}  "
-        f"Δt_phys={meta['dt_phys']:.3e}  z_Δt={meta['z_dt']:.3f}  G={meta['G_raw']:.3e}  z_G={meta['z_G']:.3f}",
+        f"t_phys={meta['time_phys']:.3e}  z_t={meta['z_time']:.3f}  G={meta['G_raw']:.3e}  z_G={meta['z_G']:.3f}",
         fontsize=10
     )
     fig.savefig(out_path_base.with_suffix(f".ch{ch}.absdiff.png"), dpi=dpi)
@@ -269,7 +311,7 @@ def _render_panel_reldiff(sample_pack: Dict[str, Any],
     meta = sample_pack["meta"]
     fig.suptitle(
         f"REL-DIFF • ch={ch}  gid={meta['gid']}  pair_index={meta['pair_index']}  stride={meta['stride']}  "
-        f"Δt_phys={meta['dt_phys']:.3e}  z_Δt={meta['z_dt']:.3f}  G={meta['G_raw']:.3e}  z_G={meta['z_G']:.3f}",
+        f"t_phys={meta['time_phys']:.3e}  z_t={meta['z_time']:.3f}  G={meta['G_raw']:.3e}  z_G={meta['z_G']:.3f}",
         fontsize=10
     )
     fig.savefig(out_path_base.with_suffix(f".ch{ch}.reldiff.png"), dpi=dpi)
@@ -388,14 +430,14 @@ def main():
     rel_mm = {"res": _init_mm(), "dgt": _init_mm(), "dpred": _init_mm()}  # in percent
 
     # per-sample windowed means table
-    csv_header = ["global_idx","gid","pair_index","stride","delta_t_phys","z_delta_t","thermal_raw","z_thermal",
+    csv_header = ["global_idx","gid","pair_index","stride","time_abs_phys","z_time","thermal_raw","z_thermal",
                   "x_ch0","x_ch1","y_ch0","y_ch1","yhat_ch0","yhat_ch1",
                   "res_ch0","res_ch1","dgt_ch0","dgt_ch1","dpred_ch0","dpred_ch1","dres_ch0","dres_ch1"]
     csv_rows: List[List[str]] = []
 
     # selection stats (full frame + window) when selection is provided
     sel_rows: List[List[str]] = []
-    sel_header = ["gid","pair_index","stride","delta_t_phys","z_delta_t","thermal_raw","z_thermal",
+    sel_header = ["gid","pair_index","stride","time_abs_phys","z_time","thermal_raw","z_thermal",
                   "x0_mean","x0_min","x0_max","x1_mean","x1_min","x1_max",
                   "y0_mean","y0_min","y0_max","y1_mean","y1_min","y1_max",
                   "yhat0_mean","yhat0_min","yhat0_max","yhat1_mean","yhat1_min","yhat1_max",
@@ -441,21 +483,20 @@ def main():
         for i in range(B):
             gid = batch["gid"][i]; k = int(batch["pair_index"][i])
             grp = h5[gid]
-            stride = int(grp["pairs_stride"][k]) if "pairs_stride" in grp else int(grp["pairs_dt_euler"][k])
-            dt_phys = float(grp["pairs_dt"][k])
-            z_dt    = float(grp["pairs_dt_norm"][k])
+            stride = _pair_stride(grp, k)
+            t_abs, z_t = _pair_time_features(grp, k)
             G_raw   = float(grp.attrs["thermal_gradient_raw"])
             muG, sdG = float(grp.attrs["thermal_mean"]), float(grp.attrs["thermal_std"])
             z_G     = (G_raw - muG) / (sdG if sdG > 0 else 1.0)
 
             if cond is not None:
                 cvec = cond[i].detach().cpu().numpy().tolist()
-                ok_g_dt  = (abs(cvec[0] - z_G) < 5e-3 and abs(cvec[1] - z_dt) < 5e-3)
-                ok_dt_g  = (abs(cvec[0] - z_dt) < 5e-3 and abs(cvec[1] - z_G) < 5e-3)
-                if not (ok_g_dt or ok_dt_g):
-                    sanity_lines.append(f"[COND MISMATCH] idx={g_index} gid={gid} k={k} cvec={cvec} vs (z_G={z_G:.4f}, z_dt={z_dt:.4f})")
-                elif ok_dt_g:
-                    sanity_lines.append(f"[COND ORDER] Dataset emits [Δt′, G′]; consider standardising to [G′, Δt′].")
+                ok_time_g = (abs(cvec[0] - z_t) < 5e-3 and abs(cvec[1] - z_G) < 5e-3)
+                ok_g_time = (abs(cvec[0] - z_G) < 5e-3 and abs(cvec[1] - z_t) < 5e-3)
+                if not (ok_time_g or ok_g_time):
+                    sanity_lines.append(f"[COND MISMATCH] idx={g_index} gid={gid} k={k} cvec={cvec} vs (z_time={z_t:.4f}, z_G={z_G:.4f})")
+                elif ok_g_time:
+                    sanity_lines.append(f"[COND ORDER] Dataset emits [G′, t′]; expected [t′, G′].")
 
             xf   = x_phys [i]
             yf   = y_phys [i]
@@ -496,7 +537,7 @@ def main():
             drsw = dprw - dgtw
 
             row = [str(g_index), gid, str(k), str(stride),
-                   f"{dt_phys:.6e}", f"{z_dt:.6f}", f"{G_raw:.6e}", f"{z_G:.6f}"]
+                   f"{t_abs:.6e}", f"{z_t:.6f}", f"{G_raw:.6e}", f"{z_G:.6f}"]
             def _means(v):
                 m = v.mean(axis=(1,2))
                 return [f"{float(m[0]):.6e}", f"{float(m[1]):.6e}"]
@@ -513,7 +554,7 @@ def main():
                     m = w.mean(axis=(1,2)); mn = w.min(axis=(1,2)); mx = w.max(axis=(1,2))
                     return [float(m[0]), float(mn[0]), float(mx[0]), float(m[1]), float(mn[1]), float(mx[1])]
                 sel_rows.append(
-                    [gid, str(k), str(stride), f"{dt_phys:.6e}", f"{z_dt:.6f}", f"{G_raw:.6e}", f"{z_G:.6f}"] +
+                    [gid, str(k), str(stride), f"{t_abs:.6e}", f"{z_t:.6f}", f"{G_raw:.6e}", f"{z_G:.6f}"] +
                     mm3(xf) + mm3(yf) + mm3(yhf) + mm3(resf) + mm3(dgtf) + mm3(dprf) + mm3(dprf - dgtf) +
                     mm3w(xf) + mm3w(yf) + mm3w(yhf) + mm3w(resf) + mm3w(dgtf) + mm3w(dprf) + mm3w(dprf - dgtf)
                 )
@@ -523,7 +564,7 @@ def main():
                 candidates.append({
                     "x": xf, "y": yf, "yhat": yhf, "rmse": rmse_i, "global_idx": g_index,
                     "meta": {"gid": gid, "pair_index": k, "stride": stride,
-                             "dt_phys": dt_phys, "z_dt": z_dt, "G_raw": G_raw, "z_G": z_G}
+                             "time_phys": t_abs, "z_time": z_t, "G_raw": G_raw, "z_G": z_G}
                 })
 
             if not np.allclose((yhf - xf) - (yf - xf), (yhf - yf), rtol=1e-6, atol=1e-6):
@@ -607,13 +648,9 @@ def main():
     for pack in chosen:
         gid = pack["meta"]["gid"]; k = pack["meta"]["pair_index"]
         grp = h5[gid]
-        stride = int(grp["pairs_stride"][k]) if "pairs_stride" in grp else int(grp["pairs_dt_euler"][k])
-        eff_dt = float(grp.attrs["effective_dt"])
-        dt_phys = float(grp["pairs_dt"][k])
+        stride = _pair_stride(grp, k)
         if stride != 1:
             sanity_lines.append(f"[STRIDE] panel uses stride={stride} (expected 1) gid={gid} k={k}")
-        if not (abs(dt_phys - eff_dt) <= 1e-10 or math.isclose(dt_phys, eff_dt, rel_tol=1e-6, abs_tol=1e-10)):
-            sanity_lines.append(f"[DELTA_T] dt_phys={dt_phys:.6e} != effective_dt={eff_dt:.6e} for gid={gid} k={k}")
 
     sanity_lines.append("[INVERT CHECK] de-standardisation applied via file-level channel_mean/std; used consistently.")
     (out_dir / "sanity_checks.txt").write_text("\n".join(sanity_lines) if sanity_lines else "No issues detected.")
@@ -623,8 +660,8 @@ def main():
             w = csv.writer(f); w.writerow(sel_header); w.writerows(sel_rows)
 
     sel_meta = [{"gid": p["meta"]["gid"], "pair_index": int(p["meta"]["pair_index"]),
-                 "stride": int(p["meta"]["stride"]), "dt_phys": float(p["meta"]["dt_phys"]),
-                 "z_dt": float(p["meta"]["z_dt"]), "G_raw": float(p["meta"]["G_raw"]), "z_G": float(p["meta"]["z_G"]),
+                 "stride": int(p["meta"]["stride"]), "time_phys": float(p["meta"]["time_phys"]),
+                 "z_time": float(p["meta"]["z_time"]), "G_raw": float(p["meta"]["G_raw"]), "z_G": float(p["meta"]["z_G"]),
                  "rmse": float(p["rmse"])} for p in chosen]
     summary = {
         "selected": sel_meta,

@@ -8,7 +8,8 @@
 #SBATCH --gres=gpu:v100:3
 #SBATCH --mem=8G
 #SBATCH --time=00:14:00
-#SBATCH --output=%x_%j.out
+#SBATCH --output=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.out
+#SBATCH --error=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.err
 
 set -euo pipefail
 
@@ -32,7 +33,7 @@ OUT="/scratch/project_2008261/rapid_solidification/results/visuals_hq/uafno_wave
 
 mkdir -p "${OUT}"
 
-PYBIN="/scratch/project_2008261/rapid_solidification/physics_ml/bin/python3.11"
+PYBIN="/scratch/project_2008261/physics_ml/bin/python3.11"
 
 # High-quality single-image visualisation for selected pair_index values
 "$PYBIN" "$SCRIPT_HQ" \

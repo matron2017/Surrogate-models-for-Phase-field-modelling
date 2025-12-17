@@ -1,1 +1,1 @@
-"""Rapid solidification models namespace."""
+"""models namespace for rapid solidification surrogates."""

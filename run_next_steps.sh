@@ -5,10 +5,10 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 
 echo "[next] Submitting datapipes smoke build"
-sbatch "$here/datapipes/rapid_solidification/smoke_build.sh"
+sbatch "$here/datapipes/smoke_build.sh"
 
 echo "[next] Submitting training smoke run"
-sbatch "$here/training/slurm/train_smoke.sh"
+sbatch "$here/slurm/train_smoke.sh"
 
 echo "[next] Submitting visuals smoke run"
 sbatch "$here/visuals/basic/run_smoke.sh"

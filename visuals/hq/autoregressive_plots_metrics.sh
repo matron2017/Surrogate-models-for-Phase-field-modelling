@@ -8,7 +8,8 @@
 #SBATCH --gres=gpu:v100:3
 #SBATCH --mem=8G
 #SBATCH --time=00:14:00
-#SBATCH --output=%x_%j.out
+#SBATCH --output=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.out
+#SBATCH --error=/scratch/project_2008261/rapid_solidification/logs/slurm/%x_%j.err
 
 set -euo pipefail
 
@@ -33,7 +34,7 @@ OUTDIR="/scratch/project_2008261/rapid_solidification/results/visuals_hq/autoreg
 
 mkdir -p "${OUTDIR}"
 
-PYBIN="/scratch/project_2008261/rapid_solidification/physics_ml/bin/python3.11"
+PYBIN="/scratch/project_2008261/physics_ml/bin/python3.11"
 
 "$PYBIN" /scratch/project_2008261/rapid_solidification/visuals/hq/autoregressive_plots_metrics.py \
   -c "${CONFIG}" \

@@ -16,5 +16,5 @@ export PYTHONPATH="/scratch/project_2008261/alloy_solidification/src:/scratch/pr
 export PF_DATA_CONFIG='/scratch/project_2008261/rapid_solidification/configs/visuals/rapid_solid_visuals.yaml'
 
 # Run
-/scratch/project_2008261/rapid_solidification/physics_ml/bin/python3.11 \
+/scratch/project_2008261/physics_ml/bin/python3.11 \
   /scratch/project_2008261/rapid_solidification/visuals/basic/curvature_plot.py

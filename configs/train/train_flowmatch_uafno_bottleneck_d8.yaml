@@ -8,7 +8,7 @@ paths:
   sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
 
 dataloader:
-  file: /scratch/project_2008261/models/models/train/core/pf_dataloader.py
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
   class: PFPairDataset
   args:
     input_channels: [0, 1]
@@ -53,7 +53,7 @@ trainer:
   device: cuda
   epochs: 1
   use_val: true
-  out_dir: /scratch/project_2008261/models/runs_debug/flowmatch_uafno_bottleneck_d8
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_uafno_bottleneck_d8
   grad_clip: 0.0
   resume: false
   amp: {enabled: true, dtype: fp16}

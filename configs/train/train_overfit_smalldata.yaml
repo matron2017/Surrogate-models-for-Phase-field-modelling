@@ -1,0 +1,82 @@
+train:
+  model_family: surrogate
+
+paths:
+  h5:
+    train:                      # pass kwargs to PFPairDataset(**…)
+      h5_path: /data/simulation_train.h5
+      input_channels: [0]       # indices into images[C]
+      target_channels: [1]
+      limit_per_group: null
+    val:
+      h5_path: /data/simulation_val.h5
+      input_channels: [0]
+      target_channels: [1]
+      limit_per_group: null
+  sim_map: null                 # unused by PFPairDataset; keep null
+
+dataloader:
+  file: /scratch/project_2008261/rapid_solidification/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args: {}                      # reserved; merged into PFPairDataset(**args)
+
+model:
+  backbone: unet
+  file: /scratch/project_2008261/rapid_solidification/models/backbones/unet_conv_att_cond.py
+  class: UNet_SSA_PreSkip_Full  # or swap to UAFNO_PreSkip_Full below
+  in_channels_override: null    # inferred from sample
+  out_channels_override: null   # inferred from sample
+  params:
+    in_factor: 78               # UNet_SSA
+    ssa_heads: 1
+    ssa_qk_ratio: 0.125
+    afno_inp_shape: null        # auto-set to (H//16, W//16) if divisible
+    # cond_dim set automatically to 2 unless overridden
+
+diffusion:
+  noise_schedule: linear
+  timestep_sampler: uniform
+
+loss:
+  weight_wavelet_loss: 0.0
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: true
+  source: channels              # "channels" or "key"
+  cond_dim: 2
+
+loader:
+  batch_size: 8
+  num_workers: 4
+  pin_memory: true
+  overfit_n: null
+
+trainer:
+  seed: 17
+  deterministic: true
+  device: cuda
+  epochs: 200
+  log_every: 25
+  cuda_graph_warmup: 11
+  grad_clip: 0.0
+  out_dir: /checkpoints/runA
+  resume: false
+  use_val: true
+
+optim:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine                  # {"none","cosine","step","exp","plateau"}
+  T_max: 200
+
+logging:
+  use_mlflow: false
+  use_wandb: false

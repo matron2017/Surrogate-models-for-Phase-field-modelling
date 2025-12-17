@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict, Counter
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import yaml
@@ -76,22 +77,23 @@ def _summarise_split(h5_path: Optional[str]) -> Optional[Dict[str, Any]]:
         for gid in f.keys():
             grp = f[gid]
             sims += 1
-            n_pairs = int(len(grp["pairs_dt"])) if "pairs_dt" in grp else 0
+            if "pairs_idx" in grp:
+                n_pairs = int(grp["pairs_idx"].shape[0])
+            elif "pairs_dt" in grp:
+                n_pairs = int(len(grp["pairs_dt"]))
+            else:
+                n_pairs = 0
             pairs_total += n_pairs
             pairs_per_sim.append(n_pairs)
 
-            if "pairs_stride" in grp:
-                strides = grp["pairs_stride"][:]
-            elif "pairs_dt_euler" in grp:
-                strides = grp["pairs_dt_euler"][:]
-            else:
-                strides = None
+            strides = _pair_stride(grp)
             if strides is not None and n_pairs > 0:
                 for s in strides[:n_pairs]:
                     stride_counts[int(s)] += 1
 
-            if "pairs_dt" in grp and n_pairs > 0:
-                for dt in grp["pairs_dt"][:]:
+            dt_arr = _pair_dt_values(grp)
+            if dt_arr is not None and n_pairs > 0:
+                for dt in dt_arr[:n_pairs]:
                     try:
                         dt_values[float(dt)] += 1
                     except Exception:
@@ -514,3 +516,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+def _pair_stride(grp):
+    if "pairs_stride" in grp:
+        return grp["pairs_stride"][:]
+    if "pairs_dt_euler" in grp:
+        return grp["pairs_dt_euler"][:]
+    if "pairs_idx" in grp:
+        idx = grp["pairs_idx"][:]
+        return (idx[:, 1] - idx[:, 0]).astype(np.int64)
+    return None
+
+
+def _pair_dt_values(grp):
+    if "pairs_dt" in grp:
+        return grp["pairs_dt"][:]
+    if "time_phys" in grp:
+        idx = grp["pairs_idx"][:]
+        times = grp["time_phys"][:]
+        return (times[idx[:, 1]] - times[idx[:, 0]]).astype(np.float64)
+    if "pairs_time" in grp:
+        arr = grp["pairs_time"][:]
+        eff_dt = float(grp.attrs.get("effective_dt", grp.file.attrs.get("effective_dt", 1.0)))
+        return ((arr[:, 1] - arr[:, 0]) * eff_dt).astype(np.float64)
+    return None

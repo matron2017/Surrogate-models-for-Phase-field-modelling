@@ -1,0 +1,54 @@
+adaptive: {enable_adaptive_resolution: false, region_selector: none}
+conditioning: {cond_dim: 2, enabled: true, source: field}
+dataloader:
+  args:
+    input_channels: [0, 1]
+    limit_per_group: null
+    target_channels: [0, 1]
+  class: PFPairDataset
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+flow_matching: {sigma: 0.0}
+loader: {batch_size: 1, limit_total: 972, num_workers: 6, pin_memory: true}
+loss: {weight_wavelet_loss: 0.0}
+model:
+  backbone: unet_film_attn
+  params:
+    attn_heads: 8
+    bottleneck_blocks: [2, 2]
+    channels: [48, 96, 192, 256, 384, 512, 512]
+    cond_dim: 2          # physical scalars (t_phys_norm, G_norm); generative time passed separately
+    dropout: 0.0
+    film_dim: 512
+    in_channels: 2
+    num_blocks: [2, 2, 2, 2, 2, 2, 2]
+    out_channels: 2
+    padding: mixed
+    skip_film: true
+    time_emb_dim: 128
+    use_time: true
+optim:
+  betas: [0.9, 0.999]
+  lr: 0.0001
+  name: adam
+  weight_decay: 0.0
+paths:
+  h5: {train: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_train.h5,
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_val.h5}
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+sched: {name: none}
+train: {model_family: flow_matching}
+trainer:
+  amp: {dtype: fp16, enabled: false}
+  channels_last: false
+  deterministic: true
+  device: cuda
+  early_stop: {enabled: false}
+  epochs: 1
+  grad_clip: 1.0
+  log_interval: 50
+  metrics: {mae: false, psnr: false}
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs_debug/flowmatch_unet_film_attn_full
+  resume: false
+  seed: 1
+  use_val: true
+  use_wavelet_weights: false

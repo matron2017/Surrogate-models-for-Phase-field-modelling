@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from models.conditioning.mixed_padding import MixedBCConv2d
 
 def add_frame(input_tensor, num_pad=1):
     output_tensor = F.pad(input_tensor, (num_pad, num_pad, num_pad, num_pad))
@@ -24,10 +25,10 @@ class DoubleConv(nn.Module):
         if mid_channels is None:
             mid_channels = out_channels
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
+            MixedBCConv2d(in_channels, mid_channels, kernel_size=3),
             # nn.BatchNorm2d(mid_channels),
             nn.GELU(),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1),
+            MixedBCConv2d(mid_channels, out_channels, kernel_size=3),
             # nn.BatchNorm2d(out_channels),
             nn.GELU()
         )
@@ -71,7 +72,7 @@ class Up(nn.Module):
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.conv = MixedBCConv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
         return self.conv(x)

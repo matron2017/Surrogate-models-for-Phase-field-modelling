@@ -1,4 +1,4 @@
-# models/rapid_solidification/uafno_preskip_full.py
+# models/models/uafno_preskip_full.py
 # No second-person phrasing in comments
 
 from dataclasses import dataclass
@@ -104,7 +104,34 @@ class UAFNO_PreSkip_Full(Module):
         # x: (B,C,H,W), s: (B,C)
         return x * s.unsqueeze(-1).unsqueeze(-1)
 
-    def forward(self, x: torch.Tensor, cond_vec: torch.Tensor) -> torch.Tensor:
+    def _merge_cond_and_t(self, cond_vec: torch.Tensor | None, t: torch.Tensor | None) -> torch.Tensor:
+        if t is None:
+            if cond_vec is None:
+                raise ValueError("Conditioning vector is required.")
+            return cond_vec
+
+        t = t.view(t.shape[0], -1).to(dtype=torch.float32, device=cond_vec.device if cond_vec is not None else t.device)
+        if cond_vec is None:
+            return t
+        if cond_vec.dim() != 2:
+            raise ValueError(f"Expected cond_vec shape (B, C), got {tuple(cond_vec.shape)}")
+        return torch.cat([cond_vec, t], dim=1)
+
+    def _split_args(self, cond_vec: torch.Tensor | None, args: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if len(args) == 0:
+            return cond_vec, None
+        if len(args) == 1:
+            extra = args[0]
+            if cond_vec is not None and cond_vec.dim() <= 1 and extra.dim() == 2:
+                return extra, cond_vec  # swap: cond_vec was t, extra is cond
+            return cond_vec if cond_vec is not None else extra, extra if cond_vec is not None else None
+        raise TypeError(f"UAFNO_PreSkip_Full.forward expected at most 3 positional args, got {2 + len(args)}")
+
+    def forward(self, x: torch.Tensor, cond_vec: torch.Tensor | None = None, *args, region_info=None) -> torch.Tensor:
+        cond_vec, timestep = self._split_args(cond_vec, args)
+
+        cond = self._merge_cond_and_t(cond_vec, timestep)
+
         # encoder
         x1 = self.inc(x)
         x2 = self.down1(x1)
@@ -113,7 +140,7 @@ class UAFNO_PreSkip_Full(Module):
         x5 = self.down4(x4)
 
         # pre-skip conditioning
-        s1, s2, s3, s4, s5 = self.scaler(cond_vec)
+        s1, s2, s3, s4, s5 = self.scaler(cond)
         x1s = self._apply_scale(x1, s1)
         x2s = self._apply_scale(x2, s2)
         x3s = self._apply_scale(x3, s3)
@@ -125,7 +152,7 @@ class UAFNO_PreSkip_Full(Module):
         x5s = self.bot_pre(x5s)
         x5s = self.afno_bottleneck(x5s)
 
-        (sb,), = (self.bot_scaler(cond_vec),)
+        (sb,), = (self.bot_scaler(cond),)
         x5s = self._apply_scale(x5s, sb)
 
         x5s = self.bot_post(x5s)
