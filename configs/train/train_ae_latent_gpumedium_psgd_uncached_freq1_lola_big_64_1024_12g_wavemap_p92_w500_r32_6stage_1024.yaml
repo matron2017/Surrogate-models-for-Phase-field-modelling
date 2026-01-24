@@ -1,0 +1,150 @@
+adaptive:
+  enable_adaptive_resolution: false
+  region_selector: none
+conditioning:
+  cond_dim: 0
+  enabled: false
+  source: field
+dataloader:
+  args:
+    add_thermal: false
+    identity_pairs: true
+    input_channels:
+    - 0
+    - 1
+    normalize_force: false
+    normalize_images: true
+    normalize_source: file
+    return_cond: false
+    target_channels:
+    - 0
+    - 1
+    use_pairs_idx: false
+  class: PFPairDataset
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  train_args:
+    augment: true
+    augment_flip: false
+    augment_roll: false
+    augment_rotate: true
+    augment_rotate_prob: 1.0
+    augment_swap: false
+    limit_per_group: null
+    max_items: null
+  val_args:
+    augment: false
+    limit_per_group: null
+    max_items: 0.25
+loader:
+  batch_size: 2
+  num_workers: 1
+  pin_memory: true
+loss:
+  ae_wavelet:
+    J: 2
+    enabled: false
+    lambda_wav: 0.1
+    mask_alpha: 999.0
+    mask_percentile: 0.93
+    mask_warmup_steps: 2000
+    mask_weight: 1.0
+    mode: zero
+    wave: haar
+  base: vmse
+  vmse_eps: 0.01
+  wavelet_weight:
+    alpha: 1.0
+    beta_w: 500.0
+    normalize: true
+    theta: 0.92
+  weight_wavelet_loss: 0.1
+model:
+  class: LatentAELoLAModel
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/latent/ae_lola_model.py
+  params:
+    dropout: 0.05
+    ffn_factor: 1
+    hid_blocks:
+    - 3
+    - 3
+    - 3
+    - 3
+    - 3
+    - 3
+    hid_channels:
+    - 64
+    - 128
+    - 256
+    - 512
+    - 1024
+    - 1024
+    identity_init: true
+    in_channels: 2
+    latent_channels: 64
+    norm: layer
+    patch_size: 1
+    pixel_shuffle: true
+    saturate_bound: 5.0
+    saturate_kind: softclip2
+    stage_strides:
+    - 2
+    - 2
+    - 2
+    - 2
+    - 2
+optim:
+  betas:
+  - 0.9
+  lr: 5.0e-5
+  merge_dims: false
+  name: psgd
+  precondition_frequency: 64
+  precondition_frequency_decay: 0.999
+  precondition_size: 512
+  precondition_warmup: 0
+  preconditioner_update_probability: 0.25
+  psgd_cached: false
+  psgd_delayed: true
+  weight_decay: 0.0
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_train.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/simulation_val.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+sched:
+  T_max: 1024
+  name: cosine
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+train:
+  model_family: surrogate
+trainer:
+  accumulation_steps: 1
+  amp:
+    dtype: fp16
+    enabled: true
+  channels_last: false
+  deterministic: true
+  device: cuda
+  early_stop:
+    enabled: false
+  epochs: 1024
+  grad_clip: 0.5
+  lr_warmup_start_lr: 0.0
+  lr_warmup_steps: 0
+  metrics:
+    mae: true
+    psnr: true
+    spectral_rmse: true
+    spectral_train: false
+    vrmse: true
+  nan_debug: false
+  nan_debug_param: autoencoder.encoder.descent.0.0.weight
+  nan_debug_steps: 0
+  nan_tolerate_steps: 3
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/ae_latent_lola_big_64_1024_psgd_uncached_freq1_12g_wavelet_wavemap_p92_w500_r32_6stage_1024
+  resume: false
+  seed: 1
+  steps_per_epoch: null
+  use_val: true
+  use_wavelet_weights: false
