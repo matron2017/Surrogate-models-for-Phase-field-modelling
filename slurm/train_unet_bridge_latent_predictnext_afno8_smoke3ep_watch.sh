@@ -57,14 +57,20 @@ if [[ ! -f "${AE_CKPT}" ]]; then
   echo "AE checkpoint not found: ${AE_CKPT}" >&2
   exit 2
 fi
+if [[ ! -d "${RUN_DIR}" ]]; then
+  echo "[warn] run directory does not exist yet: ${RUN_DIR}"
+fi
 
 cd "${ROOT}"
 export PYTHONPATH="${ROOT}"
 nvidia-smi || true
 
 echo "[run] training config: ${CFG}"
+echo "[run] ae checkpoint: ${AE_CKPT}"
 echo "[run] checkpoint watch dir: ${RUN_DIR}"
 echo "[run] plot out: ${PLOT_OUT}"
+echo "[run] latest plots mirror: ${PLOT_OUT}/latest"
+echo "[run] script start: $(date '+%F %T')"
 
 ${PY} -m torch.distributed.run --nproc_per_node=4 -m models.train.core.train -c "${CFG}" &
 TRAIN_PID=$!
