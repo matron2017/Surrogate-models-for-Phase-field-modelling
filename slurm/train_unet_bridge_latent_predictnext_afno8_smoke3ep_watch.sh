@@ -34,15 +34,18 @@ export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
 export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}
 
 ROOT=/scratch/project_2008261/pf_surrogate_modelling
+RUNS_ROOT=${RUNS_ROOT:-${ROOT}/runs}
+# Canonical artifact store: $ROOT/runs is a symlink to solidification_modelling/runs.
 PY=/scratch/project_2008261/physics_ml/bin/python3.11
 CFG=${CFG:-${ROOT}/configs/train/train_diffusion_bridge_unet_thermal_latentpsgd_e279_gpu12h_1n4g_b64_rdbmres_predictnext_nomass_afno8_smoke3ep.yaml}
-AE_CKPT=${AE_CKPT:-/scratch/project_2008261/solidification_modelling/runs/ae_latent_lola_big_64_1024_psgd_uncached_freq1_12g_latent32_nowavelet_rightclean_fixed34_gradshared_b40_precond64_p128/LatentAELoLAModel/checkpoint.best.pth}
+AE_CHECKPOINT_REL_PATH=ae_latent_lola_big_64_1024_psgd_uncached_freq1_12g_latent32_nowavelet_rightclean_fixed34_gradshared_b40_precond64_p128/LatentAELoLAModel/checkpoint.best.pth
+AE_CKPT=${AE_CKPT:-${RUNS_ROOT}/${AE_CHECKPOINT_REL_PATH}}
 INDICES=${INDICES:-234,255,300}
 BRIDGE_NFE=${BRIDGE_NFE:-20}
 PLOT_POLL_SECONDS=${PLOT_POLL_SECONDS:-45}
 PLOT_DEVICE=${PLOT_DEVICE:-cpu}
 
-RUN_BASE=/scratch/project_2008261/pf_surrogate_modelling/runs/diffusion_bridge_unet_thermal_latentpsgd_e279_gpu12h_1n4g_b64_rdbmres_predictnext_nomass_afno8_smoke3ep
+RUN_BASE=${RUN_BASE:-${RUNS_ROOT}/diffusion_bridge_unet_thermal_latentpsgd_e279_gpu12h_1n4g_b64_rdbmres_predictnext_nomass_afno8_smoke3ep}
 RUN_DIR=${RUN_BASE}/UNetFiLMAttn
 PLOT_OUT=${PLOT_OUT:-${ROOT}/results/visuals/bridge_afno8_smoke3ep_epoch_watch_${SLURM_JOB_ID}}
 
