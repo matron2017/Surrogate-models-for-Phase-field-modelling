@@ -184,3 +184,19 @@ Mitigation: begin with 1-8 nodes, then request larger allocations after stable b
 
 Risk: non-portable CUDA-specific assumptions in legacy launchers.
 Mitigation: use LUMI-specific scripts (`slurm/lumi_g_*.sh`) for all LUMI runs.
+
+## 8. Pixel-space vs Latent-space Scaling Recommendation
+
+For this application, use a mixed strategy:
+
+1. Primary scaling evidence: latent backbone training (strong + weak scaling)
+- This is the actual target production workload for uncertainty-aware surrogate runs.
+- It should consume most benchmark budget.
+
+2. Secondary evidence: pixel-space AE / latent-export workflow
+- Run limited tests to show end-to-end data pipeline feasibility on LUMI.
+- Do not spend most GPU hours on full pixel-space scaling unless it is a core production path.
+
+Rationale:
+- Latent backbone is the dominant scientific throughput path in the proposed workflow.
+- Pixel-space export is important for provenance and pipeline readiness, but often more I/O-bound.
