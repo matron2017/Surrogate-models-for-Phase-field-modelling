@@ -1,18 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=pf_lumi_template
+#SBATCH --job-name=pf_lumi_flow_scale
 #SBATCH --account=project_462001306
 #SBATCH --partition=small-g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=7
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/slurm/%x_%j.out
 #SBATCH --error=logs/slurm/%x_%j.err
 
 set -euo pipefail
 
-# Optional module setup for CSC-managed PyTorch on LUMI.
 if [[ "${LOAD_MODULES:-1}" == "1" ]]; then
   module purge
   module load LUMI
@@ -25,24 +24,48 @@ PROJECT_ROOT=${PROJECT_ROOT:-$SLURM_SUBMIT_DIR}
 PYTHON_BIN=${PYTHON_BIN:-python}
 
 CFG_BASE=${CFG_BASE:-${PROJECT_ROOT}/configs/train/train_flowmatch_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b80_rdbmres_afno8_stochastic.yaml}
-RUN_TAG=${RUN_TAG:-lumi_template}
-
 TRAIN_H5=${TRAIN_H5:-}
 VAL_H5=${VAL_H5:-}
 SIM_MAP=${SIM_MAP:-}
 
-EPOCHS=${EPOCHS:-2}
-STEPS_PER_EPOCH=${STEPS_PER_EPOCH:-20}
+MODE=${MODE:-strong}
+GLOBAL_BATCH=${GLOBAL_BATCH:-80}
 BATCH_PER_GPU=${BATCH_PER_GPU:-1}
-ACCUM_STEPS=${ACCUM_STEPS:-1}
+WEAK_ACCUM_STEPS=${WEAK_ACCUM_STEPS:-1}
+
+EPOCHS=${EPOCHS:-3}
+STEPS_PER_EPOCH=${STEPS_PER_EPOCH:-80}
 NUM_WORKERS=${NUM_WORKERS:-2}
 USE_VAL=${USE_VAL:-1}
 
 RUN_TASKS=${RUN_TASKS:-${SLURM_NTASKS}}
+RUN_TAG=${RUN_TAG:-lumi_flow_scale}
+
+if (( RUN_TASKS < 1 || RUN_TASKS > SLURM_NTASKS )); then
+  echo "Invalid RUN_TASKS=${RUN_TASKS}; allocation has SLURM_NTASKS=${SLURM_NTASKS}" >&2
+  exit 2
+fi
+
+WORLD_SIZE=${RUN_TASKS}
+if [[ "${MODE}" == "strong" ]]; then
+  DENOM=$(( WORLD_SIZE * BATCH_PER_GPU ))
+  if (( GLOBAL_BATCH % DENOM != 0 )); then
+    echo "GLOBAL_BATCH=${GLOBAL_BATCH} must be divisible by WORLD_SIZE*BATCH_PER_GPU=${DENOM} for strong scaling" >&2
+    exit 2
+  fi
+  ACCUM_STEPS=$(( GLOBAL_BATCH / DENOM ))
+elif [[ "${MODE}" == "weak" ]]; then
+  ACCUM_STEPS=${WEAK_ACCUM_STEPS}
+else
+  echo "MODE must be strong or weak (got ${MODE})" >&2
+  exit 2
+fi
+
+EFFECTIVE_BATCH=$(( WORLD_SIZE * BATCH_PER_GPU * ACCUM_STEPS ))
 
 mkdir -p "${PROJECT_ROOT}/logs/slurm" "${PROJECT_ROOT}/tmp"
-CFG_RUN="${PROJECT_ROOT}/tmp/${RUN_TAG}_${SLURM_JOB_ID}.yaml"
-OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/runs/${RUN_TAG}_${SLURM_JOB_ID}}
+OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/runs/${RUN_TAG}_${MODE}_n${SLURM_NNODES}_ws${WORLD_SIZE}_bpg${BATCH_PER_GPU}_acc${ACCUM_STEPS}_${SLURM_JOB_ID}}
+CFG_RUN="${PROJECT_ROOT}/tmp/${RUN_TAG}_${MODE}_${SLURM_JOB_ID}.yaml"
 
 if [[ ! -f "${CFG_BASE}" ]]; then
   echo "Config not found: ${CFG_BASE}" >&2
@@ -88,12 +111,12 @@ cfg.setdefault("dataloader", {})
 cfg.setdefault("loader", {})
 cfg.setdefault("trainer", {})
 
-for k in ("file",):
-    if k in cfg.get("dataloader", {}):
-        cfg["dataloader"][k] = replace_root(cfg["dataloader"][k])
-for k in ("file",):
-    if k in cfg.get("model", {}):
-        cfg["model"][k] = replace_root(cfg["model"][k])
+for key in ("file",):
+    if key in cfg.get("dataloader", {}):
+        cfg["dataloader"][key] = replace_root(cfg["dataloader"][key])
+for key in ("file",):
+    if key in cfg.get("model", {}):
+        cfg["model"][key] = replace_root(cfg["model"][key])
 
 if "sim_map" in cfg.get("paths", {}):
     cfg["paths"]["sim_map"] = replace_root(cfg["paths"]["sim_map"])
@@ -130,13 +153,11 @@ cfg["loader"]["num_workers"] = int(num_workers)
 with open(cfg_run, "w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 
-print(f"[lumi-template] wrote config: {cfg_run}")
-print(
-    f"[lumi-template] out_dir={out_dir} batch_per_gpu={cfg['loader']['batch_size']} "
-    f"accum={cfg['trainer']['accumulation_steps']} epochs={cfg['trainer']['epochs']} "
-    f"steps_per_epoch={cfg['trainer']['steps_per_epoch']}"
-)
+print(f"[lumi-scale] wrote config: {cfg_run}")
 PY
+
+echo "[lumi-scale] mode=${MODE} nodes=${SLURM_NNODES} world_size=${WORLD_SIZE} batch_per_gpu=${BATCH_PER_GPU} accum=${ACCUM_STEPS} effective_batch=${EFFECTIVE_BATCH}"
+echo "[lumi-scale] cfg=${CFG_RUN} out_dir=${OUT_DIR}"
 
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 export MPICH_GPU_SUPPORT_ENABLED=1

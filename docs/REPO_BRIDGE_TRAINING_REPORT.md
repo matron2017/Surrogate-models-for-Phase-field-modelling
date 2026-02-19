@@ -51,6 +51,3 @@ Note:
   - Tail both `.out` and `.err` for first epoch.
   - Confirm first residual/endpoint metric rows appear and plots are generated.
 
-## Agentic text policy
-
-- In this repo snapshot, a grep for `agentic`/`agentic workflow` returned no hits.

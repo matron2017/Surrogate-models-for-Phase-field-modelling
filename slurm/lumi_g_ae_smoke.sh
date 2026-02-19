@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=pf_lumi_template
+#SBATCH --job-name=pf_lumi_ae_smoke
 #SBATCH --account=project_462001306
 #SBATCH --partition=small-g
 #SBATCH --nodes=1
@@ -12,7 +12,6 @@
 
 set -euo pipefail
 
-# Optional module setup for CSC-managed PyTorch on LUMI.
 if [[ "${LOAD_MODULES:-1}" == "1" ]]; then
   module purge
   module load LUMI
@@ -24,25 +23,28 @@ fi
 PROJECT_ROOT=${PROJECT_ROOT:-$SLURM_SUBMIT_DIR}
 PYTHON_BIN=${PYTHON_BIN:-python}
 
-CFG_BASE=${CFG_BASE:-${PROJECT_ROOT}/configs/train/train_flowmatch_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b80_rdbmres_afno8_stochastic.yaml}
-RUN_TAG=${RUN_TAG:-lumi_template}
-
+CFG_BASE=${CFG_BASE:-${PROJECT_ROOT}/configs/train/train_ae_latent_gpumedium_psgd_uncached_freq1_lola_big_64_1024_12g_latent32_nowavelet_b40.yaml}
 TRAIN_H5=${TRAIN_H5:-}
 VAL_H5=${VAL_H5:-}
 SIM_MAP=${SIM_MAP:-}
 
-EPOCHS=${EPOCHS:-2}
+RUN_TASKS=${RUN_TASKS:-1}
+EPOCHS=${EPOCHS:-1}
 STEPS_PER_EPOCH=${STEPS_PER_EPOCH:-20}
 BATCH_PER_GPU=${BATCH_PER_GPU:-1}
 ACCUM_STEPS=${ACCUM_STEPS:-1}
-NUM_WORKERS=${NUM_WORKERS:-2}
+NUM_WORKERS=${NUM_WORKERS:-1}
 USE_VAL=${USE_VAL:-1}
+RUN_TAG=${RUN_TAG:-lumi_ae_smoke}
 
-RUN_TASKS=${RUN_TASKS:-${SLURM_NTASKS}}
+if (( RUN_TASKS < 1 || RUN_TASKS > SLURM_NTASKS )); then
+  echo "Invalid RUN_TASKS=${RUN_TASKS}; allocation has SLURM_NTASKS=${SLURM_NTASKS}" >&2
+  exit 2
+fi
 
 mkdir -p "${PROJECT_ROOT}/logs/slurm" "${PROJECT_ROOT}/tmp"
+OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/runs/${RUN_TAG}_ws${RUN_TASKS}_${SLURM_JOB_ID}}
 CFG_RUN="${PROJECT_ROOT}/tmp/${RUN_TAG}_${SLURM_JOB_ID}.yaml"
-OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/runs/${RUN_TAG}_${SLURM_JOB_ID}}
 
 if [[ ! -f "${CFG_BASE}" ]]; then
   echo "Config not found: ${CFG_BASE}" >&2
@@ -51,7 +53,7 @@ fi
 
 "${PYTHON_BIN}" - "${CFG_BASE}" "${CFG_RUN}" "${PROJECT_ROOT}" "${OUT_DIR}" \
   "${TRAIN_H5}" "${VAL_H5}" "${SIM_MAP}" "${EPOCHS}" "${STEPS_PER_EPOCH}" \
-  "${BATCH_PER_GPU}" "${ACCUM_STEPS}" "${NUM_WORKERS}" "${USE_VAL}" <<'PY'
+  "${BATCH_PER_GPU}" "${ACCUM_STEPS}" "${NUM_WORKERS}" "${USE_VAL}" <<"PY"
 import sys
 import yaml
 from pathlib import Path
@@ -88,12 +90,12 @@ cfg.setdefault("dataloader", {})
 cfg.setdefault("loader", {})
 cfg.setdefault("trainer", {})
 
-for k in ("file",):
-    if k in cfg.get("dataloader", {}):
-        cfg["dataloader"][k] = replace_root(cfg["dataloader"][k])
-for k in ("file",):
-    if k in cfg.get("model", {}):
-        cfg["model"][k] = replace_root(cfg["model"][k])
+for key in ("file",):
+    if key in cfg.get("dataloader", {}):
+        cfg["dataloader"][key] = replace_root(cfg["dataloader"][key])
+for key in ("file",):
+    if key in cfg.get("model", {}):
+        cfg["model"][key] = replace_root(cfg["model"][key])
 
 if "sim_map" in cfg.get("paths", {}):
     cfg["paths"]["sim_map"] = replace_root(cfg["paths"]["sim_map"])
@@ -130,13 +132,11 @@ cfg["loader"]["num_workers"] = int(num_workers)
 with open(cfg_run, "w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 
-print(f"[lumi-template] wrote config: {cfg_run}")
-print(
-    f"[lumi-template] out_dir={out_dir} batch_per_gpu={cfg['loader']['batch_size']} "
-    f"accum={cfg['trainer']['accumulation_steps']} epochs={cfg['trainer']['epochs']} "
-    f"steps_per_epoch={cfg['trainer']['steps_per_epoch']}"
-)
+print(f"[lumi-ae-smoke] wrote config: {cfg_run}")
 PY
+
+echo "[lumi-ae-smoke] nodes=${SLURM_NNODES} run_tasks=${RUN_TASKS} batch_per_gpu=${BATCH_PER_GPU} accum=${ACCUM_STEPS}"
+echo "[lumi-ae-smoke] cfg=${CFG_RUN} out_dir=${OUT_DIR}"
 
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 export MPICH_GPU_SUPPORT_ENABLED=1
@@ -149,6 +149,6 @@ srun --ntasks="${RUN_TASKS}" --cpu-bind=cores --gpu-bind=closest bash -lc "
   export RANK=\${SLURM_PROCID}
   export WORLD_SIZE=\${SLURM_NTASKS}
   export LOCAL_RANK=\${SLURM_LOCALID}
-  export PYTHONPATH='${PROJECT_ROOT}'
-  exec '${PYTHON_BIN}' -m models.train.core.train -c '${CFG_RUN}'
+  export PYTHONPATH=${PROJECT_ROOT}
+  exec ${PYTHON_BIN} -m models.train.core.train -c ${CFG_RUN}
 "

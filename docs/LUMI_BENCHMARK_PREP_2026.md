@@ -1,121 +1,87 @@
-# LUMI Benchmark Prep (2026)
+# LUMI Benchmark Prep (2026-02-19)
 
-This note answers: what to move from this repo to LUMI firstwhat not to move, and what benchmark evidence to collect for CSC applications.
+This note defines what to move from Puhti to LUMI first, what to benchmark, and
+what evidence to collect for an Extreme Scale application.
 
-## 1) Call/Access Mode Reality Check (as of 2026-02-17)
+## 1. Scope
 
-Your pasted text is from the first 2025 call.  
-Current public info indicates a newer Finnish Extreme Scale call for 2026 with updated limits/deadline.
+Primary target for scaling evidence:
+- Latent-space backbone training (flow-matching / diffusion).
 
-- LUMI news (Finnish Extreme Scale call 2026deadline extension):  
-  https://lumi-supercomputer.eu/second-finnish-lumi-extreme-scale-call-opens/
-- LUMI access modes for Finnish users (Regular/Benchmark/Extreme):  
-  https://www.lumi-supercomputer.eu/users-in-finland/
-- CSC resource calls/access guidance:  
-  https://research.csc.fi/lumi-access
+Secondary target:
+- AE smoke and light scaling for portability verification.
 
-Before drafting the final applicationre-check these pages the same day you submit.
+## 2. Minimal Transfer Bundle (recommended first)
 
-## 2) What This Repo Actually Needs For Benchmarking
+Code (small):
+- `configs/`, `models/`, `slurm/`, `scripts/`, `docs/`, `tests/`, `README.md`
 
-### Minimal transferable benchmark bundle (recommended first pass)
+Data/checkpoints (benchmark-critical):
+- `data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5`
+- `data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5`
+- `data/latent_best_psgd_e279_dev/test_latent_experimental_midtrain.h5`
+- `runs/ae_latent_lola_big_64_1024_psgd_uncached_freq1_12g_latent32_nowavelet_rightclean_fixed34_gradshared_b40_precond64_p128/LatentAELoLAModel/checkpoint.best.pth`
 
-- Code/config/scripts/docs/tests:
-  - `configs/``models/`, `slurm/`, `scripts/`, `docs/`, `tests/`, `README.md`
-- Canonical latent dataset family:
-  - `data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5` (~3.5G)
-  - `data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5` (~882M)
-  - `data/latent_best_psgd_e279_dev/test_latent_experimental_midtrain.h5` (~846M)
-- Canonical AE checkpoint paired with this latent dataset:
-  - `runs/ae_latent_lola_big_64_1024_psgd_uncached_freq1_12g_latent32_nowavelet_rightclean_fixed34_gradshared_b40_precond64_p128/LatentAELoLAModel/checkpoint.best.pth` (~1.1G)
-
-Observed size summary in this workspace:
-
-- `data/latent_best_psgd_e279_dev`: ~5.1G
+Observed Puhti size:
+- Latent HDF5 bundle: ~5.1G
 - Canonical AE checkpoint: ~1.1G
-- Code+configs+scripts+docs+tests: small (few MB)
+- Total practical first transfer: ~6.2G (+ small metadata)
 
-Total practical first transfer: ~6.2G + metadata.
+## 3. Do Not Transfer Initially
 
-### Optional (only if needed)
+- `data/stochastic/` full tree (~90G)
+- historical `logs/`, `results/`, `mlruns/`
+- old checkpoints not needed for benchmark reproducibility
 
-- Warm-start training checkpoints (`~4.8G` each) from smoke/previous runs.
+## 4. LUMI-G Constraints That Affect Scripts
 
-## 3) What Not To Move Initially
+LUMI-G compute node:
+- 56 CPU cores
+- 8 GPU GCDs (4x MI250X, 2 GCD per GPU)
 
-- `data/stochastic` (~90G) unless you need raw/full-space re-encoding workflows on LUMI immediately.
-- `logs/slurm/``results/`, `mlruns/` historical artifacts.
-- `runs` symlink targets in bulk.
+For full-node GPU runs, use:
+- `--ntasks-per-node=8`
+- `--gpus-per-node=8`
+- `--cpus-per-task=7`
 
-Move only the exact checkpoints/datasets required for benchmark reproducibility.
+For multi-GPU jobs, keep one rank per GCD and use:
+- `--gpu-bind=closest`
+- `--cpu-bind=cores`
 
-## 4) Porting Gaps You Must Fix Before LUMI Benchmarks
+## 5. Current Practical Benchmark Capacity (project_462001306)
 
-Current repo has many Puhti-specific and CUDA/V100 assumptions.
+From account/partition checks on 2026-02-19:
+- `small-g`: max 4 nodes, max 3 days
+- `standard-g`: max 1024 nodes, max 2 days
+- `dev-g`: max 32 nodes, max 3 hours
+- assoc limits include up to ~200 running jobs on `small-g`/`standard-g`
 
-- Hardcoded `/scratch/project_2008261` occurrences in code/config/scripts: `366`
-- Many Slurm launchers hardcode:
-  - `#SBATCH --gres=gpu:v100:...`
-  - CUDA/NVIDIA-specific env (`CUBLAS_WORKSPACE_CONFIG``PYTORCH_CUDA_ALLOC_CONF`, etc.)
-- Python env here is CUDA wheels (`torch==2.8.0+cu128`)not ROCm.
+Realistic campaign now:
+1. functional smoke on `dev-g` or `small-g`
+2. 1/2/4 node scaling on `small-g`
+3. 8+ node points on `standard-g`
 
-For LUMI-G you should prepare:
+## 6. Benchmark Evidence Required
 
-1. Cluster-agnostic path variables (`PROJECT_ROOT``DATA_ROOT`, `RUNS_ROOT`).
-2. LUMI Slurm templates (LUMI partition/account syntax from LUMI docs).
-3. ROCm-compatible PyTorch environment/container.
-4. One canonical benchmark launcher per objective (ReFlow-style and SFM-style).
+Collect for each run point:
+- wall-time per step (median and p95)
+- throughput (samples/s)
+- effective batch and accumulation steps
+- node count, world size, and per-GPU batch
+- success/failure status and restart count
+- fixed git commit + exact YAML used
 
-## 5) Benchmark Evidence To Collect (for CSC technical readiness)
+## 7. Recommended Execution Order
 
-Use Benchmark Access first to produce these artifacts:
+1. AE smoke (`slurm/lumi_g_ae_smoke.sh`)
+2. Backbone smoke (`MODE=strong`, 1 node)
+3. Backbone strong scaling: 1 -> 2 -> 4 -> 8 nodes
+4. Backbone weak scaling: 1 -> 2 -> 4 -> 8 nodes
+5. One integrated end-to-end run
 
-1. **Single-node baseline**:
-   - throughput (samples/s or steps/s)
-   - GPU memory usage
-   - convergence sanity for at least a few epochs
-2. **Strong scaling**:
-   - fixed global batchnodes: 1 -> 2 -> 4
-   - report speedup and parallel efficiency
-3. **Weak scaling**:
-   - fixed per-GPU batchnodes: 1 -> 2 -> 4
-   - report throughput growth and stability
-4. **I/O profile**:
-   - startup + dataloader overhead
-   - sustained read behavior from dataset location
-5. **Reproducibility package**:
-   - exact commit hash
-   - exact config YAMLs
-   - exact Slurm scripts
-   - exact env export
+## 8. Resource Estimation Formula
 
-## 6) Resource Estimation Template
+- `GPU-hours = nodes * gpus_per_node * walltime_hours * run_count`
+- `CPU-core-hours = nodes * (ntasks_per_node * cpus_per_task) * walltime_hours * run_count`
 
-Use measured benchmark wall times (not guesses) to extrapolate:
-
-- `GPU-hours = (#nodes) * (GPUs per node) * (walltime hours) * (number of runs)`
-- `CPU-core-hours = (#nodes) * (cores per node used) * (walltime hours) * (number of runs)`
-- `Storage-hours = (requested TiB) * (project duration hours)`
-
-Include queue-time risk and failed-run overhead buffer.
-
-## 7) Practical Transfer Checklist
-
-1. Export code snapshot at fixed commit.
-2. Export env lockfile (`pip freeze` / container recipe).
-3. Copy minimal dataset + canonical AE checkpoint.
-4. Validate one tiny smoke run on LUMI.
-5. Run the scaling benchmark matrix.
-6. Archive plots/tables/log extracts for proposal appendix.
-
-## 8) Immediate Recommendation For This Project
-
-Given current workflowstart with:
-
-- One ReFlow-style benchmark run config:
-  - `configs/train/train_flowmatch_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b64_rdbmres_afno8_reflow2506_long_v1.yaml`
-- One SFM-style benchmark run config:
-  - `configs/train/train_flowmatch_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b64_rdbmres_afno8_sfm_latent_long_v1.yaml`
-
-and benchmark both with the same data split and reporting format.
-
+Add buffer for queue delay and failed runs before submitting final request numbers.

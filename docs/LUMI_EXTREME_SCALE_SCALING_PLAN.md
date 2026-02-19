@@ -1,59 +1,88 @@
 # LUMI Extreme-Scale Scaling Plan
 
-## Goal
-Establish reproducible scaling evidence on LUMI-G (AMD MI250X) for phase-field surrogate training.
+Updated: 2026-02-19
 
-## Which workloads to benchmark
-1. Autoencoder (AE) training:
-- Purpose: fast sanity checks for ROCm portability and data pipeline throughput.
-- Scope: single-node and light multi-node.
+## Objective
 
-2. Latent-space diffusion/flow backbone training:
-- Purpose: primary scaling evidence for Extreme Scale readiness.
-- Scope: full strong/weak scaling campaign.
+Produce reproducible strong/weak scaling evidence on LUMI-G for the latent
+backbone training workflow, with AE results used as portability checks.
 
-3. End-to-end latent workflow (AE encoder/decoder + backbone):
-- Purpose: one integrated proof point that the full pipeline works at scale.
-- Scope: limited runs (not full grid).
+## External Requirements (summary)
 
-## Recommended benchmark matrix
-1. Single-node smoke:
-- GPUs: 1, 2, 4, 8 (one LUMI-G node)
-- Fixed config, short duration (10-20 minutes)
-- Validate loss trends, throughput stability, and no ROCm runtime errors.
+For Extreme Scale applications, benchmark evidence is expected and benchmark
+access is the standard route before requesting very large production resources.
 
-2. Strong scaling (main evidence):
-- Keep global batch fixed.
-- Nodes: 1, 2, 4, 8 (then higher if queue allows).
-- Report: samples/s, sec/step, scaling efficiency.
+LUMI-G job-layout requirements that matter for this project:
+- 8 GPU GCDs per node (4x MI250X)
+- 56 CPU cores per node
+- preferred full-node layout: `8 tasks/node`, `1 GPU task`, `7 CPU cores/task`
 
-3. Weak scaling:
-- Keep per-GPU batch fixed.
-- Increase nodes proportionally.
-- Report: throughput growth and communication overhead trend.
+## Workloads and Priority
 
-## Metrics to record
-- Wall-clock sec/step (median and p95)
-- Samples/sec and effective tokens/voxels/sec (if applicable)
-- GPU memory headroom
-- Data loading time fraction
-- Convergence proxy at fixed step budget
-- Failure rate / restart rate
+1. Backbone scaling (primary evidence):
+- latent flow-matching or diffusion UNet/UViT backbone
 
-## Acceptance criteria (proposal-ready)
-- Stable runs at >= 8 nodes for backbone training.
-- Strong-scaling efficiency trend documented (not necessarily perfect).
-- Weak-scaling trend documented with bottleneck notes.
-- Reproducible commands and exact config hashes tracked.
+2. AE smoke/light scaling (secondary evidence):
+- verify ROCm portability and data throughput
 
-## Operational notes
-- Keep Puhti for rapid debug only; use LUMI runs for final scaling evidence.
-- Keep one canonical config family for scaling to avoid apples-to-oranges comparisons.
-- Do not modify training semantics between scaling points.
+3. End-to-end integrated run:
+- one proof run after scaling matrix completion
 
-## Suggested execution order
-1. LUMI single-node smoke for AE and backbone.
-2. Backbone strong scaling to the largest reliable node count.
-3. Backbone weak scaling.
-4. One end-to-end integrated latent workflow run.
-5. Summarize in a benchmark table for application material.
+## Matrix Design
+
+### A. Smoke
+
+- Nodes: 1
+- World size points: 1, 2, 4, 8 GCD
+- Duration: 10-20 minutes
+- Purpose: launch correctness, ROCm runtime stability, dataloader sanity
+
+### B. Strong Scaling (main)
+
+- Keep global effective batch fixed (e.g. 64 or 80)
+- Nodes: 1 -> 2 -> 4 -> 8 (extend if queue allows)
+- Report:
+  - throughput speedup vs 1 node
+  - parallel efficiency = speedup / node_count
+
+### C. Weak Scaling
+
+- Keep per-GPU batch fixed
+- Increase node count proportionally
+- Report:
+  - throughput growth
+  - sec/step drift
+  - communication overhead trend
+
+## Metrics to Record Per Run
+
+- commit hash
+- config hash/path
+- partition/account/nodes/tasks
+- per-GPU batch and accumulation
+- sec/step (median, p95)
+- samples/s
+- memory headroom (from logs if available)
+- run status (success/failure)
+
+## Scripts in This Repository
+
+- `slurm/lumi_g_ae_smoke.sh`
+- `slurm/lumi_g_backbone_scaling_job.sh`
+- `slurm/lumi_g_submit_backbone_scaling_matrix.sh`
+- `slurm/lumi_g_scaling_template.sh`
+
+## Recommended Run Order
+
+1. AE smoke (`RUN_TASKS=1` then `2/4/8`)
+2. Backbone strong-scaling matrix
+3. Backbone weak-scaling matrix
+4. One integrated latent workflow run
+5. Export final table for proposal appendix
+
+## Success Criteria for Proposal Material
+
+- Stable multi-node backbone runs at >= 8 nodes
+- Documented strong-scaling efficiency trend
+- Documented weak-scaling trend with bottleneck interpretation
+- Fully reproducible commands + configs + commit IDs
