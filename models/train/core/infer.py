@@ -42,8 +42,13 @@ if __name__ == "__main__":
     B = 1
     C_in = len(preproc["input_channels"]) if isinstance(preproc.get("input_channels"), (list, tuple)) else int(preproc.get("input_channels", 1))
     H, W = preproc["spatial_shape"]
-    cd = int(preproc["conditioning"].get("cond_dim", 0)) if preproc["conditioning"].get("source","field").lower()=="channels" else 0
-    x = torch.zeros(B, C_in + cd, H, W)
-    cond = None if cd>0 else torch.zeros(B, int(preproc["conditioning"].get("cond_dim", 0)))
+    cond_cfg = dict(preproc.get("conditioning", {}) or {})
+    if bool(cond_cfg.get("enabled", False)):
+        raise ValueError(
+            "Scalar conditioning has been removed from the active training path. "
+            "Set conditioning.enabled=false and use conditioning.use_theta with add_thermal."
+        )
+    x = torch.zeros(B, C_in, H, W)
+    cond = None
     y = run_once(model, x, cond=cond, device=args.device, amp_dtype=manifest.get("amp_dtype","bf16"))
     print("output", tuple(y.shape))

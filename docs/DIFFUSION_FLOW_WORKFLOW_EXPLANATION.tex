@@ -1,0 +1,235 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.0in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\title{PF Surrogate Training Workflow: Diffusion Bridge vs. Flow Matching}
+\author{pf\_surrogate\_modelling}
+\date{2026-02-15}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+This document explains the current training workflow used in
+\texttt{pf\_surrogate\_modelling}, with concrete variable-level interpretation:
+\begin{itemize}
+  \item what each top-level config section means,
+  \item how flow models differ from diffusion bridge models,
+  \item where the main operations occur in code,
+  \item and where the known artifacts/mismatch risks come from.
+\end{itemize}
+
+\section{High-level design}
+The project currently supports two major families for latent PDE prediction:
+\begin{enumerate}
+  \item \textbf{Flow Matching} (deterministic transport-style velocity matching, no diffusion corruption step).
+  \item \textbf{Diffusion Bridge} (stochastic forward corruption + reverse denoising/step-matching).
+\end{enumerate}
+
+Both are currently used in latent space, with:
+\begin{itemize}
+  \item spatial grid inputs at latent resolution (typically $64\times 64$ channels),
+  \item thermal conditioning maps carried separately (\texttt{theta}),
+  \item AFNO inserted in the bottleneck of \texttt{unet\_bottleneck\_attn}.
+\end{itemize}
+
+\section{Config-to-code execution map}
+\subsection{Entrypoints and main loop}
+\begin{itemize}
+  \item \texttt{models/train/core/train.py}: full experiment bootstrap (load config, build model, optimizer, scheduler, data, logger, resume, run epochs).
+  \item \texttt{models/train/core/loops.py}: forward/target construction, loss calculations, train/val loops, objective dispatch.
+  \item \texttt{models/train/core/diffusion\_forward.py}: diffusion-noisy pair generation and bridge/model input assembly.
+  \item \texttt{models/train/core/utils.py}: batching, latent encoding/selection, no-op and utility scheduling helpers.
+\end{itemize}
+
+\subsection{Active configs}
+Current long-format references used in this workflow:
+\begin{itemize}
+  \item \texttt{configs/train/train\_flowmatch\_unet\_thermal\_latentpsgd\_e279\_gpu24h\_1n4g\_b64\_rdbmres\_afno8.yaml}
+  \item \texttt{configs/train/train\_diffusion\_bridge\_unet\_thermal\_latents...yaml}
+\end{itemize}
+
+\section{Detailed variable interpretation}
+
+\subsection{Data path and dataloader}
+\textbf{Section: \texttt{dataloader}}
+\begin{description}
+  \item[\texttt{file}] Python module implementing dataset class (e.g. \texttt{models/train/core/pf\_dataloader.py}).
+  \item[\texttt{class}] Class name, typically \texttt{PFPairDataset}.
+  \item[\texttt{args.data\_key}] HDF5 key for model arrays.
+  \item[\texttt{args.input\_channels}, \texttt{args.target\_channels}] Channel selection from latent tuple.
+  \item[\texttt{args.add\_thermal}] If true, thermal field is appended to the data stream.
+  \item[\texttt{args.thermal\_axis}] Where thermal field is stored in sample axis.
+  \item[\texttt{args.thermal\_use\_x0}] Use thermal condition from input/source snapshot.
+  \item[\texttt{args.thermal\_on\_target}] Usually \texttt{false}; keep conditioning aligned with source step.
+  \item[\texttt{normalize\_images}] If false, raw values are used (in your current runs).
+  \item[\texttt{normalize\_source:file}] Standardise source channels according to file-level statistics.
+\end{description}
+
+\subsection{Conditioning}
+\textbf{Section: \texttt{conditioning}}
+\begin{description}
+  \item[\texttt{enabled}] Must be false in current active setup (scalar-conditioning path disabled).
+  \item[\texttt{use\_theta}] Must be true for thermal-field conditioning.
+  \item[\texttt{theta\_channels}] Number of thermal channels passed to model as conditioning field.
+  \item[\texttt{theta\_normalization}] Usually \texttt{affine}.
+  \item[\texttt{theta\_shift}, \texttt{theta\_scale}] Affine normalisation constants for thermal map:
+  \[
+    \theta_{\text{norm}} = \frac{\theta-\text{theta\_shift}}{\text{theta\_scale}}.
+  \]
+  \item[\texttt{theta\_eps}] Numerical floor for safe division in affine and zscore modes.
+\end{description}
+
+\subsection{Model}
+\textbf{Section: \texttt{model}}
+\begin{description}
+  \item[\texttt{backbone}] Currently often \texttt{unet\_bottleneck\_attn}.
+  \item[\texttt{params.in\_channels}] Input channels expected by backbone.
+  \item[\texttt{params.out\_channels}] Output channels (target latent field channels).
+  \item[\texttt{channels}] U-net channel widths per downsampling stage.
+  \item[\texttt{num\_blocks}] Number of residual blocks per stage.
+  \item[\texttt{bottleneck\_blocks}] Number of residual blocks before/after AFNO path.
+  \item[\texttt{attn\_heads}] Attention head count in optional bottleneck attention.
+  \item[\texttt{afno\_depth}] Number of AFNO layers.
+  \item[\texttt{afno\_inp\_shape}] Spatial size expected by AFNO block.
+  \item[\texttt{afno\_patch\_size}] Patch size in AFNO frequency projection.
+  \item[\texttt{afno\_num\_blocks}] Number of internal AFNO transformer-style blocks.
+  \item[\texttt{afno\_mlp\_ratio}] MLP expansion inside AFNO.
+  \item[\texttt{use\_time}] Whether model expects explicit time input channel argument.
+  \item[\texttt{use\_control\_branch}, \texttt{hint\_channels}] Optional thermal control branch (ControlNet-like injection).
+  \item[\texttt{use\_bottleneck\_attn}] optional extra attention at latent bottleneck.
+\end{description}
+
+\subsection{Trainer/scheduler}
+\textbf{Section: \texttt{trainer}, \texttt{optim}, \texttt{sched}}
+\begin{description}
+  \item[\texttt{trainer.epochs}] Number of epochs.
+  \item[\texttt{trainer.accumulation\_steps}] Gradient accumulation factor.
+  \item[\texttt{trainer.grad\_clip}] Norm clipping threshold.
+  \item[\texttt{trainer.seed}] RNG seed.
+  \item[\texttt{trainer.deterministic}] Enforces deterministic backend flags when true.
+  \item[\texttt{optim.name}, \texttt{optim.lr}, \texttt{optim.betas}, \texttt{optim.weight\_decay}] Optimizer selection.
+  \item[\texttt{sched.name}] LR schedule family (e.g. step/multistep/cosine).
+  \item[\texttt{sched.milestones}] Epoch milestones for LR drops.
+  \item[\texttt{sched.gamma}] LR drop multiplier.
+  \item[\texttt{sched.warmup\_epochs}, \texttt{sched.warmup\_start\_lr}] Linear warmup to base LR.
+\end{description}
+
+\subsection{Autoencoder and latent workflow}
+\textbf{Section: \texttt{train.autoencoder} / \texttt{train.autoencoder\_cfg}, not always shown in all configs}
+\begin{description}
+  \item If configured, a trainable or fixed AE compresses pixel fields to latent fields.
+  \item \texttt{_apply\_latent\_pipeline} handles:
+  \begin{enumerate}
+    \item encode($x$), encode($y$),
+    \item optional field selection/splitting for latent channels,
+    \item thermal interpolation to latent spatial size.
+  \end{enumerate}
+  \item If no AE configured, workflow runs directly on pixel input as a fallback.
+\end{description}
+
+\section{Mathematical workflow}
+\subsection{Flow matching (source-anchored)}
+Given source latent \(z_0\), target latent \(z_1\) and random \(t\sim \mathcal U(0,1)\):
+\[
+z_t = (1-t)z_0 + tz_1,\qquad
+u_t = z_1 - z_0.
+\]
+Model predicts \(\hat{u}_t = f_\theta(z_t,t,\theta)\) (note \(\theta\) is conditioning field, not angle). Loss is MSE on velocity:
+\[
+\mathcal L_{\text{FM}} = \| \hat{u}_t - u_t\|_2^2.
+\]
+This is what your flow configs under \texttt{train.model\_family: flow\_matching} implement.
+
+\subsection{Diffusion bridge (UniDB)}
+Given target \(x\) and source \(x_0\), with UniDB schedule and timestep \(t\in\{1,\dots,T-1\}\):
+\[
+x_t = f_{\text{mean}}(x, x_0,t) + f_\sigma(t)\,\epsilon,\qquad \epsilon\sim\mathcal N(0,I).
+\]
+In your implementation:
+\[
+x_{\text{model-in}} = \text{concat}(x_t - x_0,\; x_0)
+\]
+when \(\texttt{input\_mode=delta\_source\_concat}\).
+\[
+\mathcal L_{\text{pred-next}} = \|\hat{x}_t - \epsilon\|_2^2
+\]
+for \texttt{unidb\_predict\_next}; or reverse-step matching variants for \texttt{unidb\_reverse\_step}.
+
+\section{How ``noisy'' vs ``deterministic'' differs}
+\begin{itemize}
+  \item \textbf{Flow matching}: trajectory is deterministic by objective; randomness only in sampling mini-batches, \(t\), and optional user-side stochastic heads.
+  \item \textbf{Diffusion bridge}: explicit stochastic forward corruption, then reverse denoising/step prediction path.
+\end{itemize}
+
+Therefore the claim
+\begin{quote}
+``Flow matching is not denoising in the same sense as bridge''
+\end{quote}
+is correct for your current setup.
+
+\section{Observed artifact mechanism (grid/checkerboard)}
+\begin{itemize}
+  \item Checkerboard-like high-frequency grid noise is commonly amplified by upsampling operators.
+  \item \texttt{unet\_bottleneck\_attn} currently uses transposed-convolution upsampling in decoder blocks.
+  \item This can be a valid explanation of residual grid texture in decoded fields even when core objective values improve.
+\end{itemize}
+Mitigation options already considered:
+\begin{enumerate}
+  \item replace decoder upsample with resize+conv (bilinear/nearest + 3x3 conv),
+  \item increase anti-aliasing / smoothing after decode,
+  \item increase validation checks for frequency-domain metrics \texttt{spectral\_rmse}.
+\end{enumerate}
+
+\section{Monitoring and outputs}
+\subsection{Current metrics}
+\begin{itemize}
+  \item \texttt{mae}, \texttt{psnr}, \texttt{vrmse}, \texttt{spectral\_rmse}, \texttt{endpoint\_rmse}.
+  \item Endpoint RMSE/metrics are especially relevant for one-step forecast quality.
+  \item Spectral RMSE helps detect high-frequency artifacts.
+\end{itemize}
+
+\subsection{Checkpoint and run safety}
+Recent code changes also include:
+\begin{itemize}
+  \item SIGTERM handler in \texttt{train.py} to mark \texttt{run.json} interrupted when preempted.
+  \item Watcher+plotter scripts for periodic endpoint visualization on saved checkpoints.
+\end{itemize}
+
+\section{Glossary of common symbols}
+\begin{description}
+  \item[\(x\)] source latent at current step.
+  \item[\(y\)] target latent (next step).
+  \item[\(\theta\)] thermal conditioning field (not geometric angle).
+  \item[\(t\)] normalized time in \([0,1]\) (flow) or timestep index (diffusion scheduler).
+  \item[\(\epsilon\)] Gaussian noise used only in stochastic diffusion forward/reverse procedures.
+  \item[\(u_t\)] ground-truth target velocity in flow matching objective.
+  \item[\(f_{\text{mean}}, f_\sigma\)] UniDB schedule mean and scale functions.
+  \item[\(L\)] objective/loss function.
+\end{description}
+
+\section{How to choose next path}
+\begin{itemize}
+  \item If your goal is \textbf{stable one-step prediction with physical conditioning}, continue with source-anchored flow matching and compare schedules.
+  \item If your goal is \textbf{uncertainty-aware multi-modal futures}, diffusion bridge with controlled stochasticity remains more aligned with sample variability.
+  \item For a fair comparison, keep:
+  \begin{enumerate}
+    \item same dataset split,
+    \item same AE/checkpoint version,
+    \item same latent dimension,
+    \item same metrics set.
+  \end{enumerate}
+\end{itemize}
+
+\section{Suggested quick checks before long job}
+\begin{enumerate}
+  \item run one gputest smoke (2--4 batches), ensure logs show finite losses;
+  \item verify \texttt{out\_dir}, \texttt{run.json}, and checkpoint writes;
+  \item confirm \texttt{endpoint\_rmse} and \texttt{spectral\_rmse} trend with fixed random seeds;
+  \item inspect one saved endpoint plot before starting 24h queue.
+\end{enumerate}
+
+\end{document}

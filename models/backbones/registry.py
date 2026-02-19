@@ -5,11 +5,9 @@ from __future__ import annotations
 from typing import Any, Callable, Dict
 
 from models.backbones.ads_convnext import ADSAutoregressiveSurrogate
-from models.backbones.uafno_cond import UAFNO_PreSkip_Full
-from models.backbones.unet_conv_att_cond import UNet_SSA_PreSkip_Full
 from models.backbones.unet_film_bottleneck import UNetFiLMAttn
-from models.backbones.fno_field import FNO_Field2D
 from models.backbones.uvit_film import UVitFiLMVelocity
+from models.backbones.uvit_thermal import UVitThermalSurrogate
 
 BackboneBuilder = Callable[..., Any]
 
@@ -17,14 +15,11 @@ _BACKBONE_REGISTRY: Dict[str, BackboneBuilder] = {}
 
 
 def _register_default_backbones() -> None:
-    register_backbone("unet", UNet_SSA_PreSkip_Full)
-    register_backbone("unet_ssa", UNet_SSA_PreSkip_Full)
     register_backbone("unet_film_attn", UNetFiLMAttn)
     register_backbone("unet_bottleneck_attn", UNetFiLMAttn)
-    register_backbone("uafno", UAFNO_PreSkip_Full)
-    register_backbone("fno", FNO_Field2D)
     register_backbone("ads_convnext", ADSAutoregressiveSurrogate)
     register_backbone("uvit", UVitFiLMVelocity)
+    register_backbone("uvit_thermal", UVitThermalSurrogate)
 
 
 def register_backbone(name: str, builder: BackboneBuilder) -> None:

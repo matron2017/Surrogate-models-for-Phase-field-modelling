@@ -25,9 +25,9 @@ experiments/diffusion_prototype/
 Drop any raw `.npy`/`.h5` bundles inside `data/` (or point the configs to the
 existing `/scratch/project_2008261/rapid_solidification/data/...` assets).
 
-- **Backbone** – `models/backbones/uafno_diffusion.py` hosts the
-  AFNO-based residual denoiser with timestep embeddings + FiLM conditioning.
-  Import it inside future training loops (Step 3 in `docs/NEXT_STEPS.md`).
+- Residual DDPM/AFNO scalar-conditioning components were removed as part of the
+  thermal-field-only cleanup. This prototype folder now focuses on the
+  `train_vae.py` + `train_diffusion.py` pathway.
 
 ## Environment & Dependencies
 
@@ -110,36 +110,6 @@ $PY experiments/diffusion_prototype/src/train_diffusion.py \\
 ```
 Ensure `training.vae_checkpoint` points at a trained VAE weight file before
 kick-off.
-
-### Residual DDPM (UAFNO)
-```bash
-cd /scratch/project_2008261/rapid_solidification
-PY=/scratch/project_2008261/physics_ml/bin/python3.11
-$PY experiments/diffusion_prototype/src/train_ddpm_residual.py \\
-  --config experiments/diffusion_prototype/configs/ddpm_placeholder.json
-```
-- Dataset: `ResidualPatchDataset` randomly crops `[x_t, x_{t+Δ}]` patches and
-  uses `[thermal_gradient, current_time]` as the conditioning vector (see
-  `dataset.py`).
-- Model: `UAFNO_DiffusionUNet` (FiLM-conditioned variant) from
-  `models/backbones/uafno_diffusion.py`.
-- Scheduler: Hugging Face `DDPMScheduler` configured via
-  `configs/ddpm_placeholder.json`.
-- Slurm smoke: `sbatch slurm/train_diffusion.sh` (runs on `gputest`,
-  `gpu:v100:1`, `mem=16G`).
-
-- **Inference / denoising loop**
-  ```bash
-  cd /scratch/project_2008261/rapid_solidification
-  PY=/scratch/project_2008261/physics_ml/bin/python3.11
-  CKPT=/scratch/project_2008261/rapid_solidification/runs_debug/diffusion_smoke/epoch001.pt
-  $PY experiments/diffusion_prototype/src/infer_ddpm_residual.py \\
-    --config experiments/diffusion_prototype/configs/ddpm_placeholder.json \\
-    --checkpoint "$CKPT" \\
-    --num-samples 2 --inference-steps 50
-  ```
-  The script runs the DDPM sampling loop (using the same scheduler config),
-  compares the reconstructed `x_{t+Δ}` patches to ground truth, and prints per-sample/average MSE.
 
 ## Next Steps
 

@@ -1,25 +1,48 @@
-# Rapid Solidification — Remaining TODOs
+# Next Steps (AE PSGD Debugging)
 
-Only active work items are tracked here (completed tasks removed for brevity).
+## Current Objective
+Stabilise strict‑sync PSGD training at scale and eliminate early NaNs while keeping baseline runs untouched for comparison.
 
-## 1. Config propagation in auxiliary launchers
-- [ ] Verify any non-standard launchers (Optuna scripts, bespoke notebooks) set the descriptor fields before invoking `models/train/core/train.py`.
+## Current State (at time of writing)
+- Baseline full runs (unchanged):
+  - 31422326 (nowavelet, 5 nodes)
+  - 31422330 (wavelet, 5 nodes)
+- Strict‑sync diagnostic run:
+  - 31459094 (nowavelet strict‑sync, 5 nodes, AMP **off**) — RUNNING
 
-## 3. Registries stay authoritative
-- [ ] When adding new backbones or adaptive hooks, extend the registries and avoid gating logic inside `models/train/core/train.py`.
+## What we know
+- Short strict‑sync runs (120–350 steps, 2–6 nodes) complete without NaNs.
+- Full strict‑sync runs with **baseline hyperparams** (batch=2, AMP on) fail **immediately at epoch 1 step 3** across many ranks.
+- Warmup + preconditioner ramp did **not** prevent step‑3 NaNs.
 
-## 5. Optuna + Slurm integration
-- [ ] Ensure the Optuna driver writes sampled hyperparameters into the shared config schema prior to submission.
-- [ ] Update worker scripts so each trial runs `models/train/core/train.py` with the merged config and reports `metric.val_rel_l2` consistently to both Optuna and MLflow.
+## Immediate Decision Tree
+1) **If 31459094 (AMP off) still hits step‑3 NaNs**
+   - AMP is **not** the primary cause.
+   - Next actions:
+     - Enable per‑layer forward stats (min/max/mean) around step 1–5.
+     - Log loss components and check for invalid operations (e.g., division/log/sqrt) in loss path.
+     - Consider temporarily disabling saturate/softclip or lowering `saturate_bound` to test stability.
 
-## Diffusion Follow-ups
-- [ ] Run the residual DDPM pipeline on the real HDF5 dataset (swap out the placeholder path in `configs/ddpm_placeholder.json`).
-- [ ] Expand the inference CLI to tile residual predictions back into full-resolution fields and export diagnostics.
+2) **If 31459094 is stable (no step‑3 NaNs)**
+   - AMP is likely the trigger.
+   - Next actions:
+     - Re‑enable AMP but set GradScaler `init_scale` lower (if configurable) or switch to static loss scaling.
+     - Consider `bf16` only if GPUs support it (V100 does not). Otherwise, stay AMP off for strict‑sync while keeping baselines as AMP on.
 
-## Queue + Wavelet follow-ups
-- [ ] Watch UNet smoke `30910647` and U-AFNO smoke `30910648`; resubmit U-AFNO or FNO smoke once queue limits clear.
-- [ ] After smokes land, review `logs/slurm/training_*30910647*.out` / `training_*30910648*.out` for sane loss trends and errors.
-- [ ] Confirm wavelet YAMLs point to `/scratch/project_2008261/solidification_modelling/data/rapid_solidification/simulation_train_a10000b50000.wavelet.h5` before longer runs.
+## Other hypotheses still open
+- Data‑order sensitivity: strict‑sync runs at world size 20/24 expose early “bad batches.”
+  - If AMP off also fails, add a short “bad batch dump” (gid/pair) for the first NaN.
+- PSGD preconditioner instability: only relevant if NaNs occur **later** (epoch 2+). Not supported by current evidence.
 
-## Boundary conditions (all backbones)
-- [ ] Enforce mixed BCs consistently: y periodic (circular padding), x-left replicate (copy edge outward), x-right reflect/mirror (≈ zero normal gradient). For patch training, use halo + center loss: crop (P+2H)×(P+2H), pad with `pad_mixed_bc`, predict, compute loss on center P×P only. Re-impose BCs after each diffusion/flow step if needed (wrap y, replicate left, reflect right).
+## Where we track progress
+- Debug journal: `pf_surrogate_modelling/docs/AE_PSGD_DEBUG_LOG.md`
+- Slurm logs: `pf_surrogate_modelling/logs/slurm/`
+- Launchers: `pf_surrogate_modelling/slurm/`
+- Configs: `pf_surrogate_modelling/configs/train/`
+
+## Notes
+- Keep baseline runs (31422326/31422330) untouched for apples‑to‑apples comparison.
+- Strict‑sync is diagnostic: if it stays unstable, the issue is likely numerical/AMP/data‑order rather than NCCL desync.
+
+## Related
+- See `OPEN_QUESTIONS.md` for thermal-field conditioning decisions and open research questions.

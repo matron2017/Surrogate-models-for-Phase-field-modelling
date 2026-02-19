@@ -1,0 +1,141 @@
+train:
+  model_family: diffusion
+
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    data_key: latent_images
+    input_channels: "all"
+    target_channels: "all"
+    identity_pairs: false
+    use_pairs_idx: true
+    add_thermal: true
+    thermal_axis: x
+    thermal_use_x0: true
+    thermal_on_target: false
+    return_cond: false
+    normalize_images: false
+    normalize_force: false
+    normalize_source: file
+  train_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+    augment_rotate: false
+    augment_rotate_prob: 0.0
+    augment_flip: false
+    augment_swap: false
+    augment_roll: false
+  val_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+
+model:
+  backbone: uvit_thermal
+  params:
+    in_channels: 64
+    out_channels: 32
+    channels: [32, 64, 96]
+    heads: 4
+    film_dim: 128
+    theta_in_ch: 1
+    theta_mode: film
+    theta_hidden: 64
+    attn_pool: 8
+    attn_max_tokens: 512
+    dropout: 0.0
+
+diffusion:
+  noise_schedule: unidb_cosine
+  timestep_sampler: uniform
+  schedule_kwargs:
+    timesteps: 100
+    lambda_square: 30.0
+    gamma_inv: 0.0
+    eps: 0.005
+    # RDBM-style residual modulation:
+    # x_t = f_mean + f_sigma * (pi * eps), with pi derived from (target - source).
+    residual_mode: abs
+    residual_normalize: true
+    residual_scale: 1.0
+    residual_power: 1.0
+    residual_clip: null
+    residual_eps: 1.0e-6
+  sampler_kwargs:
+    t_min: 1
+    t_max: 100
+  dt: 1.0
+  n_steps: 1
+  thermal_bc: dirichlet
+  record_trajectory: false
+
+loss:
+  base: mse
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.0
+  diffusion_objective: unidb_reverse_step
+  diffusion_matching_loss: l1
+  diffusion_weighting:
+    kind: none
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: false
+  use_theta: true
+  theta_channels: 1
+
+loader:
+  batch_size: 2
+  num_workers: 4
+  pin_memory: true
+
+trainer:
+  seed: 1
+  deterministic: true
+  device: cuda
+  epochs: 200
+  accumulation_steps: 10
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/diffusion_bridge_uvit_thermal_latentbest213_gpu5h_b80_rdbmres
+  grad_clip: 1.0
+  resume: false
+  amp:
+    enabled: true
+    dtype: fp16
+  channels_last: false
+  metrics:
+    mae: true
+    psnr: true
+    vrmse: true
+    spectral_rmse: false
+    spectral_train: false
+  early_stop:
+    enabled: false
+  use_wavelet_weights: false
+
+optim:
+  name: adam
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine
+  T_max: 200
+  eta_min: 1.0e-6
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+
+mlflow:
+  enabled: false

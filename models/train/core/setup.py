@@ -29,6 +29,19 @@ from models.train.tasks.diffusion_task import DiffusionTask
 from models.diffusion.configs import DiffusionConfig
 
 
+_FLOW_NO_SOURCE_CONCAT_OBJECTIVES = {
+    "dbfm_source_anchored",
+    "dbfm_rectified_flow",
+    "dbfm_flow",
+    "dbfm",
+}
+
+
+def _flow_uses_source_concat(cfg: Dict[str, Any]) -> bool:
+    objective = str(cfg.get("train", {}).get("objective", "default")).lower()
+    return objective not in _FLOW_NO_SOURCE_CONCAT_OBJECTIVES
+
+
 def _init_distributed(cfg: Dict[str, Any]) -> Tuple[torch.device, int]:
     trainer_cfg = cfg["trainer"]
     seed = int(trainer_cfg.get("seed", 17))
@@ -68,22 +81,53 @@ def _init_distributed(cfg: Dict[str, Any]) -> Tuple[torch.device, int]:
 def _build_datasets(cfg: Dict[str, Any], seed: int):
     DSClass = _load_symbol(cfg["dataloader"]["file"], cfg["dataloader"]["class"])
     ds_args = cfg["dataloader"].get("args", {})
+    train_args = cfg["dataloader"].get("train_args", {})
+    val_args = cfg["dataloader"].get("val_args", {})
+    ds_args_train = {**ds_args, **train_args}
+    ds_args_val = {**ds_args, **val_args}
 
     if isinstance(cfg["paths"]["h5"]["train"], dict):
-        train_ds = DSClass(**cfg["paths"]["h5"]["train"], **ds_args)
+        train_ds = DSClass(**cfg["paths"]["h5"]["train"], **ds_args_train)
     else:
-        train_ds = DSClass(cfg["paths"]["h5"]["train"], **ds_args)
+        train_ds = DSClass(cfg["paths"]["h5"]["train"], **ds_args_train)
 
     use_val_flag = bool(cfg["trainer"].get("use_val", True)) and cfg["paths"]["h5"].get("val")
     val_ds = None
     if use_val_flag:
         if isinstance(cfg["paths"]["h5"]["val"], dict):
-            val_ds = DSClass(**cfg["paths"]["h5"]["val"], **ds_args)
+            val_ds = DSClass(**cfg["paths"]["h5"]["val"], **ds_args_val)
         else:
-            val_ds = DSClass(cfg["paths"]["h5"]["val"], **ds_args)
+            val_ds = DSClass(cfg["paths"]["h5"]["val"], **ds_args_val)
 
-    if cfg["loader"].get("overfit_n") is not None:
-        n = int(cfg["loader"]["overfit_n"])
+    overfit_indices = cfg["loader"].get("overfit_indices")
+    overfit_n = cfg["loader"].get("overfit_n")
+    if overfit_indices is not None:
+        if isinstance(overfit_indices, str):
+            idxs = [int(tok.strip()) for tok in overfit_indices.split(",") if tok.strip()]
+        else:
+            idxs = [int(v) for v in overfit_indices]
+        if not idxs:
+            raise ValueError("loader.overfit_indices was provided but empty.")
+        if overfit_n is not None and _rank0():
+            print(
+                "[loader] both overfit_indices and overfit_n were set; using overfit_indices.",
+                flush=True,
+            )
+
+        def _subset_exact(ds, name: str):
+            bad = [i for i in idxs if i < 0 or i >= len(ds)]
+            if bad:
+                raise ValueError(
+                    f"loader.overfit_indices contains out-of-range values for {name} dataset "
+                    f"(len={len(ds)}): {bad[:8]}"
+                )
+            return Subset(ds, idxs)
+
+        train_ds = _subset_exact(train_ds, "train")
+        if val_ds is not None:
+            val_ds = _subset_exact(val_ds, "val")
+    elif overfit_n is not None:
+        n = int(overfit_n)
         train_ds = Subset(train_ds, list(range(min(n, len(train_ds)))))
 
     sample = train_ds[0]
@@ -92,14 +136,17 @@ def _build_datasets(cfg: Dict[str, Any], seed: int):
     H, W = int(x0.shape[-2]), int(x0.shape[-1])
 
     cond_cfg = dict(cfg.get("conditioning", {}))
-    cond_enabled = cond_cfg.get("enabled", True)
-    cond_dim = int(cond_cfg.get("cond_dim", 2))
-    cond_source = str(cond_cfg.get("source", "field")).lower()
+    cond_enabled = bool(cond_cfg.get("enabled", False))
     if cond_enabled:
-        if cond_source == "channels":
-            assert x0.size(0) >= cond_dim
-        else:
-            assert "cond" in sample and sample["cond"].dim() == 1 and sample["cond"].numel() == cond_dim
+        raise ValueError(
+            "Scalar conditioning has been removed from the active training path. "
+            "Set conditioning.enabled=false and use conditioning.use_theta with add_thermal."
+        )
+    cond_dim = 0
+    cond_source = "none"
+    cond_cfg["cond_dim"] = 0
+    cond_cfg["source"] = "none"
+    cond_cfg.pop("cond_indices", None)
 
     has_weight = "weight" in sample
     use_weight_loss = bool(cfg["trainer"].get("use_wavelet_weights", False))
@@ -107,10 +154,34 @@ def _build_datasets(cfg: Dict[str, Any], seed: int):
         raise RuntimeError("trainer.use_wavelet_weights=True but dataset samples do not contain 'weight'.")
 
     model_family = str(cfg["train"].get("model_family", "surrogate")).lower()
-    state_channels = x0.shape[0] - (cond_dim if cond_enabled and cond_source == "channels" else 0)
+    flow_uses_source_concat = _flow_uses_source_concat(cfg)
+    state_channels = x0.shape[0]
+    if cond_cfg.get("use_theta", False):
+        if not bool(ds_args.get("add_thermal", False)):
+            raise ValueError(
+                "conditioning.use_theta=true requires dataloader.args.add_thermal=true "
+                "so the thermal field is present in input channels."
+            )
+        theta_channels = int(cond_cfg.get("theta_channels", 1))
+        if theta_channels <= 0:
+            raise ValueError("conditioning.theta_channels must be positive when use_theta is enabled.")
+        theta_norm = str(cond_cfg.get("theta_normalization", "none")).strip().lower()
+        if _rank0() and theta_norm in {"none", ""}:
+            print(
+                "[warning] conditioning.use_theta=true with theta_normalization='none'. "
+                "Raw thermal magnitudes may destabilize training; consider affine normalization.",
+                flush=True,
+            )
+        state_channels -= theta_channels
     if state_channels <= 0:
         raise ValueError(f"Non-positive state_channels inferred from input shape {tuple(x0.shape)} and cond_dim={cond_dim}")
-    model_in_channels = state_channels * (2 if model_family in {"diffusion", "flow_matching"} else 1)
+    if model_family == "diffusion":
+        model_multiplier = 2
+    elif model_family == "flow_matching":
+        model_multiplier = 2 if flow_uses_source_concat else 1
+    else:
+        model_multiplier = 1
+    model_in_channels = state_channels * model_multiplier
 
     return {
         "train_ds": train_ds,
@@ -135,24 +206,43 @@ def _build_model_and_task(cfg: Dict[str, Any], device, model_in_channels: int, c
     backbone = str(model_cfg.get("backbone") or _infer_backbone_name(model_cfg))
     use_legacy_model = "file" in model_cfg and "class" in model_cfg and model_cfg.get("file") and model_cfg.get("class")
 
+    cond_cfg = dict(cfg.get("conditioning", {}) or {})
+    cond_enabled = bool(cond_cfg.get("enabled", False))
+    if cond_enabled:
+        raise ValueError(
+            "Scalar conditioning has been removed from the active training path. "
+            "Set conditioning.enabled=false and use conditioning.use_theta with add_thermal."
+        )
+
     if use_legacy_model:
         ModelClass = _load_symbol(model_cfg["file"], model_cfg["class"])
         base_model = ModelClass(**model_cfg.get("params", {}))
     else:
         model_cfg_local = dict(model_cfg)
         backbone_name_local = str(model_cfg_local.get("backbone", backbone)).lower()
-        if model_family == "flow_matching":
-            params = dict(model_cfg_local.get("params", model_cfg_local))
-            if "cond_dim" in params:
-                if backbone_name_local in {"unet_film_attn", "unet_bottleneck_attn"}:
-                    params["cond_dim"] = int(params["cond_dim"])
-                else:
-                    params["cond_dim"] = int(params["cond_dim"]) + 1
-            model_cfg_local["params"] = params
         params = dict(model_cfg_local.get("params", model_cfg_local))
+        if "cond_dim" in params:
+            # Keep FiLM-UNet scalar channel enabled for the t-input path used in
+            # diffusion/flow calls (model(x, t, ...)). For other backbones, keep
+            # legacy behavior and disable scalar conditioning.
+            if backbone_name_local in {"unet_film_attn", "unet_bottleneck_attn"}:
+                params["cond_dim"] = max(1, int(params.get("cond_dim", 1)))
+            else:
+                params["cond_dim"] = 0
+        model_cfg_local["params"] = params
+        params = dict(model_cfg_local.get("params", model_cfg_local))
+        theta_extra = 0
+        use_control_branch = bool(params.get("use_control_branch", False))
+        if (
+            model_family in {"diffusion", "flow_matching"}
+            and bool(cfg.get("conditioning", {}).get("use_theta", False))
+            and backbone_name_local in {"unet_film_attn", "unet_bottleneck_attn"}
+            and not use_control_branch
+        ):
+            theta_extra = int(cfg.get("conditioning", {}).get("theta_channels", 1))
         for key in ("in_channels", "n_channels"):
             if key in params and model_family in {"diffusion", "flow_matching"}:
-                params[key] = model_in_channels
+                params[key] = model_in_channels + theta_extra
         model_cfg_local["params"] = params
         base_model = registry_build_model(model_family, backbone, model_cfg_local)
 

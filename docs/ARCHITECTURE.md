@@ -1,6 +1,7 @@
 # Rapid Solidification Repo Layout (LEAN)
 
-This document records the trimmed directory layout after removing legacy log/run artefacts. Code now sits under the `models/` Python package; Slurm/shell wrappers stay at repo root.
+This document records the trimmed directory layout after removing legacy code paths.
+Code sits under `models/`; launchers live in `slurm/`; generated artefacts are isolated in output directories.
 
 ```
 configs/                 # YAML descriptors for data, training, visuals
@@ -9,10 +10,17 @@ docs/                    # Dev guide, environment notes, monitoring, checklists
 experiments/             # Prototypes (e.g., diffusion_prototype)
 models/                  # Python package (backbones, conditioning, diffusion, train/*)
 slurm/                   # Batch launchers pointing to models/train/core/train.py
-visuals/                 # Shell wrappers for plotting
-logs/, runs_debug/, results/  # Artefacts and outputs (ignored in git)
+scripts/                 # Project-specific analysis scripts
+tools/                   # Generic helper utilities
+tests/                   # Automated tests
+visuals/                 # Plotting/evaluation modules and wrappers
+logs/, results/, runs_debug/, mlruns/  # Generated artefacts/outputs
 README.md                # Quickstart & directory map
 ARCHITECTURE.md          # (this file)
 ```
 
-Artefacts under `logs/`, `runs/`, `runs_debug/`, and `mlruns/` are ignored by git; avoid checking in heavy outputs. Expect future runs to create fresh `runs_debug/…` paths under `/scratch` when configs/training jobs execute. Keep new artefacts (checkpoints, MLflow outputs, Slurm logs) under a dedicated directory if needed, e.g., `artifacts/`.
+Key distinction:
+- `slurm/` = submit scripts.
+- `logs/slurm/` = generated outputs from submitted jobs.
+
+Artefacts under `logs/`, `results/`, `runs/`, `runs_debug/`, and `mlruns/` should remain output-only. Keep source code in `models/`, `scripts/`, `visuals/`, `tools/`, and `tests/`.

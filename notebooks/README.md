@@ -5,7 +5,7 @@ Lightweight workflow for shape checks, quick experiments, and debugging without 
 ## Quick start (CPU)
 - One-time: `PYTHONPATH=models python -m ipykernel install --user --name pf_models`.
 - Launch: `PYTHONPATH=models ipython` or `jupyter notebook --no-browser --port 8888 --ip 0.0.0.0`.
-- Use the smoke dataset/configs (`configs/data/phase_field_data_smoke.yaml`, `configs/train/train_smoke.yaml`) for fast shape checks.
+- Use a small subset of the active HDF5 dataset for fast shape checks.
 
 ## Interactive GPU shell (recommended for notebook sessions)
 - Reserve a short GPU slot: `srun --account=project_2008261 --partition=gputest --gres=gpu:v100:1 --cpus-per-task=6 --time=00:30:00 --pty bash`.
@@ -21,30 +21,26 @@ Lightweight workflow for shape checks, quick experiments, and debugging without 
 - If you need custom deps, install them into `physics_ml/` with `pip install --user --target` or a venv clone to avoid polluting the shared env.
 
 ## Useful snippets
-- Build a loader quickly:
+- Build the active pair dataset quickly:
   ```python
-  import yaml
-  from models.train.core.pf_dataloader import build_dataloaders
+  from models.train.core.pf_dataloader import PFPairDataset
 
-  cfg = yaml.safe_load(open("configs/train/train_smoke.yaml"))
-  train_loader, val_loader, _ = build_dataloaders(cfg["data"])
-  batch = next(iter(train_loader))
-  print({k: v.shape for k, v in batch.items()})
+  ds = PFPairDataset(
+      h5_path="data/stochastic/simulation_train.h5",
+      input_channels=[0, 1],
+      target_channels=[0, 1],
+      limit_per_group=2,
+      add_thermal=True,
+      return_cond=False,
+  )
+  sample = ds[0]
+  print(sample["input"].shape, sample["target"].shape)
   ```
-- Instantiate a backbone for shape checks:
-  ```python
-  from models.backbones.registry import build_backbone
-  from models.train.core.config import DotDict
-
-  model = build_backbone(DotDict(cfg["model"]))
-  out = model(batch["x"], t=None, cond=batch.get("cond"))
-  print(out.shape)
-  ```
-- Run a one-step training smoke: `PYTHONPATH=models python -m models.train.core.smoketest_train -c configs/train/train_smoke.yaml` (CPU-friendly).
+- Run tests locally: `PYTHONPATH=models python -m pytest -q tests`.
 
 ## When to Slurm vs. interactive
 - Use the interactive GPU shell for <30–60 min explorations, plotting, and shape debugging.
-- Use `sbatch slurm/train_smoke.sh` for regressions or if you need to leave a job unattended.
+- Use one of the active AE launchers in `slurm/` for unattended cluster runs.
 - For multi-node or long runs, keep using the existing Slurm launchers; capture notes/results in `docs/EXPERIMENT_STATUS.md` and a dated log in `notebooks/`.
 
 ## Keeping track

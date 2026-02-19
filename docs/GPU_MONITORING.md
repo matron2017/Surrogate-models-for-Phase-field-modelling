@@ -118,7 +118,7 @@ Inspect the `.qdrep` in Nsight Systems locally to see where GPUs idle.
 
 ## 6. Multi-Node Validation Checklist
 
-Use `slurm/test_parallel_multinode.sh` with `train/core/ddp_multi_node_check.py` to ensure cross-node NCCL works before queueing long runs.
+Use `train/core/ddp_multi_node_check.py` inside a multi-node allocation to ensure cross-node NCCL works before queueing long runs.
 
 What to look for in the job log:
 

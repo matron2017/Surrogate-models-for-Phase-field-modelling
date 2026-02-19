@@ -5,6 +5,8 @@
 - `ARCHITECTURE.md` – current top-level layout and artefact notes.
 - `AE_CAPACITY_JUSTIFICATION.md` – layer/parameter comparison vs LoLA-large and why the current AE is considered sufficiently large for now.
 - `FLOWMATCH_DIFFUSION_BRIDGE_REPO_SURVEY.md` – side-by-side mapping of backbones, input framing, noise schedules, and step conventions across local FM/DB repos.
+- `WORKSPACE_REPO_COLLECTION_2026-02-17.md` – consolidated catalog of all neighboring repos/snapshots, remotes, method tags, and PF relevance.
+- `STOCHASTIC_READINESS_2026-02-17.md` – verified stochastic behavior status (bridge vs flow), exact gputest jobs, and recommendations before long runs.
 - `DIRECTORY_GUIDE.md` – one-line purpose per folder.
 - `DEV_GUIDE.md` – test commands, smoke launches, ablation parity, DDP notes.
 - `GIT_WORKFLOW.md` – practical staging/validation workflow for this active HPC repo.
@@ -15,7 +17,7 @@
 - `NEXT_STEPS.md` – active checklist for upcoming work.
 - `OPEN_QUESTIONS.md` – thermal-field conditioning decisions, open questions, and key resources.
 - `PUHTI_PARTITIONS.md` – Puhti/Mahti partition cheat sheet.
-- `AGENTS.md` – project instructions (paths, environment, test commands).
+- `LUMI_BENCHMARK_PREP_2026.md` – what to transfer to LUMI first, benchmark-readiness checklist, and proposal-oriented resource estimation.
 - `WORKFLOW_THERMAL_LATENT.md` – end-to-end grouped workflow for thermal-field latent surrogate training.
 - `../CONTRIBUTING.md` – contribution rules (tests, artifact hygiene, commit structure).
 

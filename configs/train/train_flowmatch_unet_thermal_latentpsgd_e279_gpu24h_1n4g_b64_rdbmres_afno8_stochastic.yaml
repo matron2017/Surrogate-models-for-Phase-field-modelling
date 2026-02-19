@@ -1,0 +1,166 @@
+train:
+  model_family: flow_matching
+  objective: rectified_flow_source_anchored_concat
+
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    data_key: latent_images
+    input_channels: all
+    target_channels: all
+    identity_pairs: false
+    use_pairs_idx: true
+    add_thermal: true
+    thermal_axis: x
+    thermal_use_x0: true
+    thermal_on_target: false
+    normalize_images: false
+    normalize_force: false
+    normalize_source: file
+  train_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+    augment_rotate: false
+    augment_rotate_prob: 0.0
+    augment_flip: false
+    augment_swap: false
+    augment_roll: false
+  val_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+
+model:
+  backbone: unet_bottleneck_attn
+  params:
+    in_channels: 64
+    out_channels: 32
+    cond_dim: 2
+    channels:
+      - 192
+      - 384
+      - 768
+      - 1024
+    num_blocks:
+      - 2
+      - 2
+      - 2
+      - 2
+    bottleneck_blocks:
+      - 2
+      - 2
+    attn_heads: 8
+    use_bottleneck_attn: false
+    afno_depth: 12
+    afno_inp_shape:
+      - 8
+      - 8
+    afno_patch_size: 1
+    afno_num_blocks: 16
+    afno_mlp_ratio: 8.0
+    afno_sparsity_threshold: 0.01
+    afno_hard_thresholding_fraction: 1.0
+    film_dim: 512
+    time_emb_dim: 128
+    dropout: 0.0
+    padding: mixed
+    use_time: false
+    skip_film: true
+    film_mode: affine
+    use_control_branch: true
+    hint_channels: 1
+    control_strength: 1.0
+
+loss:
+  base: mse
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.0
+  flow_matching_loss: l2
+
+flow_matching:
+  # Source-side stochasticity + stochastic conditioning.
+  sigma: 0.05
+  noise_stochastic_std: 0.05
+  noise_stochastic_mode: scalar
+  noise_stochastic_perturb_source: true
+  val_rollout_nfe: 20
+  val_num_samples: 4
+  val_deterministic: false
+  val_probabilistic_metrics: true
+  val_monitor_metric_stochastic: endpoint_crps
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: false
+  use_theta: true
+  theta_channels: 1
+  theta_normalization: affine
+  theta_shift: 902.0
+  theta_scale: 20.0
+  theta_eps: 1.0e-06
+
+loader:
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+trainer:
+  seed: 1
+  deterministic: true
+  device: cuda
+  epochs: 1000
+  accumulation_steps: 1
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/flowmatch_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b64_rdbmres_afno8_stochastic
+  grad_clip: 1.0
+  resume: false
+  amp:
+    enabled: true
+    dtype: fp16
+  channels_last: false
+  metrics:
+    mae: true
+    psnr: true
+    vrmse: true
+    vrmse_eps: 1.0e-2
+    spectral_rmse: true
+    endpoint_rmse: true
+    spectral_train: false
+  early_stop:
+    enabled: false
+    split: val
+    mode: min
+    metric: endpoint_crps
+  use_wavelet_weights: false
+
+optim:
+  name: adam
+  lr: 0.0001
+  weight_decay: 0.0
+  betas:
+    - 0.9
+    - 0.999
+
+sched:
+  name: multistep
+  milestones:
+    - 300
+    - 600
+    - 900
+  gamma: [0.5, 0.1, 0.5]
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+
+mlflow:
+  enabled: false

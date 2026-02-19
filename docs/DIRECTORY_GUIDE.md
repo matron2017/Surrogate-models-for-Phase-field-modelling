@@ -1,13 +1,18 @@
 # Directory Guide
 
-- models/: Python package with backbones, diffusion/flow-matching logic, and train scripts.
-- configs/: YAML configs for training/visuals. New flow-matching and diffusion smokes live under configs/train/.
-- slurm/: Slurm launchers; DDP helpers for gputest (1-node/4-GPU, 2-node/8-GPU).
-- docs/: Centralised guides (dev, env, monitoring, checklists).
-- data/: Rapid solidification HDF5/JSON assets (unchanged).
-- logs/: Slurm stdout/err.
-- runs_debug/: Outputs from smoke runs (metrics, plots, checkpoints).
-- visuals/, tools/, datapipes/: Utilities for preprocessing and plotting.
-- experiments/: Prototypes (e.g., diffusion_prototype).
+- models/: Main Python package (backbones, latent models, trainer, dataloaders).
+- configs/: Train/data/visual configuration files.
+- slurm/: Job launchers (`sbatch` scripts); does not store runtime logs.
+- logs/: Generated runtime logs; `logs/slurm/` stores Slurm stdout/stderr.
+- results/: Generated diagnostics/plots/CSVs.
+- runs/ and runs_debug/: Symlinked training artefact roots.
+- mlruns/: MLflow run metadata/artifacts.
+- scripts/: Project-specific analysis and dataset utility scripts.
+- visuals/: Reusable plotting/evaluation code and wrappers.
+- tools/: Generic developer helpers (job watcher, tree/tools).
+- experiments/: Prototype/sandbox workflows outside the mainline path.
+- docs/: Human documentation and onboarding maps.
+- tests/: Automated checks for active code paths.
+- datapipes/: Dataset conversion/build wrappers.
 
 All imports assume `models/` as the package root; do not rename the package.

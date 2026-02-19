@@ -341,6 +341,68 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     diff_cfg = cfg["diffusion"]
     flow_objective = str(cfg["train"].get("objective", "default")).lower()
     diffusion_objective = str(cfg["loss"].get("diffusion_objective", "epsilon_mse")).lower()
+    flow_stochastic_cfg = cfg.get("flow_matching", {})
+    if not isinstance(flow_stochastic_cfg, dict):
+        flow_stochastic_cfg = {}
+    flow_stochastic_std = float(flow_stochastic_cfg.get("noise_stochastic_std", 0.0))
+    flow_stochastic_mode = str(flow_stochastic_cfg.get("noise_stochastic_mode", "scalar")).strip().lower()
+    flow_stochastic_perturb_source = bool(flow_stochastic_cfg.get("noise_stochastic_perturb_source", True))
+    flow_val_nfe = max(1, int(flow_stochastic_cfg.get("val_rollout_nfe", 20)))
+    flow_val_num_samples = max(1, int(flow_stochastic_cfg.get("val_num_samples", 1)))
+    flow_val_deterministic = bool(flow_stochastic_cfg.get("val_deterministic", False))
+    flow_val_prob_metrics = bool(flow_stochastic_cfg.get("val_probabilistic_metrics", True))
+    flow_val_monitor_metric_stochastic = str(
+        flow_stochastic_cfg.get("val_monitor_metric_stochastic", "endpoint_crps")
+    ).strip().lower()
+    sfm_sigma_z = float(flow_stochastic_cfg.get("sfm_sigma_z", max(flow_stochastic_std, 0.05)))
+    sfm_sigma_min = float(flow_stochastic_cfg.get("sfm_sigma_min", 1e-3))
+    sfm_sigma_max = float(flow_stochastic_cfg.get("sfm_sigma_max", 0.25))
+    sfm_adaptive_sigma = bool(flow_stochastic_cfg.get("sfm_adaptive_sigma", True))
+    sfm_sigma_ema_beta = float(flow_stochastic_cfg.get("sfm_sigma_ema_beta", 0.02))
+    sfm_encoder_reg_lambda = float(flow_stochastic_cfg.get("sfm_encoder_reg_lambda", 0.0))
+    sfm_objectives = {"sfm_latent_source_denoise_concat", "sfm_latent_source_concat"}
+    if model_family == "flow_matching":
+        flow_backbone = base_model.backbone if hasattr(base_model, "backbone") else base_model
+        flow_backbone_cond_dim = getattr(flow_backbone, "cond_dim", None)
+        flow_requires_stochastic_scalar = bool(flow_objective in sfm_objectives) or (flow_stochastic_std > 0.0)
+        if flow_requires_stochastic_scalar:
+            if flow_backbone_cond_dim is None:
+                raise ValueError(
+                    "Flow stochastic configuration requires a backbone exposing cond_dim "
+                    "(expected cond_dim>=2 for [t, noise])."
+                )
+            flow_backbone_cond_dim = int(flow_backbone_cond_dim)
+            if flow_backbone_cond_dim < 2:
+                raise ValueError(
+                    "Flow stochastic conditioning is enabled, but model.params.cond_dim is too small.\n"
+                    f"Got cond_dim={flow_backbone_cond_dim}, expected >=2 for [t, noise] scalars.\n"
+                    "Set model.params.cond_dim=2 in the flow config to avoid silently ignoring stochastic noise."
+                )
+    if _rank0() and model_family == "flow_matching":
+        if flow_stochastic_std > 0.0 and (not flow_val_deterministic) and flow_val_num_samples <= 1:
+            print(
+                "[flow.val] stochastic rollout configured with single-sample validation. "
+                "For stable endpoint metrics, set flow_matching.val_num_samples>1 or "
+                "flow_matching.val_deterministic=true.",
+                flush=True,
+            )
+        print(
+            "[flow.val] "
+            f"rollout_nfe={flow_val_nfe} "
+            f"num_samples={flow_val_num_samples} "
+            f"deterministic={flow_val_deterministic} "
+            f"prob_metrics={flow_val_prob_metrics} "
+            f"stochastic_monitor_metric={flow_val_monitor_metric_stochastic}",
+            flush=True,
+        )
+        if flow_objective in sfm_objectives:
+            print(
+                "[flow.sfm] "
+                f"sigma_z={sfm_sigma_z} sigma_min={sfm_sigma_min} sigma_max={sfm_sigma_max} "
+                f"adaptive_sigma={sfm_adaptive_sigma} ema_beta={sfm_sigma_ema_beta} "
+                f"encoder_reg_lambda={sfm_encoder_reg_lambda}",
+                flush=True,
+            )
     noise_schedule_obj = None
     timestep_sampler_obj = None
     region_selector_obj = None
@@ -403,6 +465,10 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
         "rectified_flow_constant_displacement_concat",
         "rectified_flow_source_anchored",
         "rectified_flow_source_anchored_concat",
+        "rectified_flow_noise_source_concat",
+        "rectified_flow_noise_cond_concat",
+        "sfm_latent_source_denoise_concat",
+        "sfm_latent_source_concat",
         "dbfm_source_anchored",
         "dbfm_rectified_flow",
         "dbfm_flow",
@@ -466,6 +532,53 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     monitor_split_es = es_cfg.get("split", default_split)
     monitor_mode_es = es_cfg.get("mode", default_mode)
     monitor_metric_es = es_cfg.get("metric", monitor_metric_sched)
+    flow_monitor_force_endpoint = bool(cfg["trainer"].get("flow_monitor_force_endpoint", True))
+    if (
+        model_family == "flow_matching"
+        and flow_monitor_force_endpoint
+        and bool(use_val_flag and val_dl is not None)
+        and want_endpoint_rmse
+    ):
+        objective_like_metrics = {
+            "",
+            "mse",
+            "rmse",
+            "mae",
+            "objective",
+            "spectral_rmse",
+            "vrmse",
+        }
+        endpoint_like_metrics = {
+            "endpoint_mse",
+            "endpoint_rmse",
+            "endpoint_spectral_rmse",
+        }
+        prob_override_enabled = bool(
+            flow_val_prob_metrics and (not flow_val_deterministic) and flow_val_num_samples > 1
+        )
+        preferred_flow_metric = (
+            flow_val_monitor_metric_stochastic if prob_override_enabled else "endpoint_rmse"
+        )
+        sched_split = str(monitor_split_sched).strip().lower()
+        sched_metric = str(monitor_metric_sched or "").strip().lower()
+        es_split = str(monitor_split_es).strip().lower()
+        es_metric = str(monitor_metric_es or "").strip().lower()
+        if sched_split == "val" and sched_metric in (objective_like_metrics | endpoint_like_metrics):
+            if _rank0():
+                print(
+                    f"[monitor] overriding scheduler metric to '{preferred_flow_metric}' for flow rollout consistency "
+                    f"(was '{monitor_metric_sched}')",
+                    flush=True,
+                )
+            monitor_metric_sched = preferred_flow_metric
+        if es_split == "val" and es_metric in (objective_like_metrics | endpoint_like_metrics):
+            if _rank0():
+                print(
+                    f"[monitor] overriding checkpoint metric to '{preferred_flow_metric}' for flow rollout consistency "
+                    f"(was '{monitor_metric_es}')",
+                    flush=True,
+                )
+            monitor_metric_es = preferred_flow_metric
     es_enabled = bool(es_cfg.get("enabled", False))
     es_patience = int(es_cfg.get("patience", 30))
     es_min_delta = float(es_cfg.get("min_delta", 0.0))
@@ -484,7 +597,15 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
         if requested and (requested in src) and (src.get(requested) is not None):
             return float(src[requested])
 
-        endpoint_keys = ("endpoint_rmse", "endpoint_mse", "endpoint_spectral_rmse")
+        endpoint_keys = (
+            "endpoint_crps",
+            "endpoint_rmse",
+            "endpoint_mse",
+            "endpoint_spectral_rmse",
+            "endpoint_ssr_distance",
+            "endpoint_ssr",
+            "endpoint_spread",
+        )
         generic_keys = ("rmse", "mse", "spectral_rmse", "objective")
         fallback_order = endpoint_keys + generic_keys if requested.startswith("endpoint_") else generic_keys + endpoint_keys
         for key in fallback_order:
@@ -530,6 +651,19 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     if model_family == "flow_matching":
         mlflow_params["flow_matching.sigma"] = float(cfg["flow_matching"].get("sigma", 0.0))
         mlflow_params["train.objective"] = flow_objective
+        mlflow_params["flow_matching.noise_stochastic_std"] = flow_stochastic_std
+        mlflow_params["flow_matching.noise_stochastic_mode"] = flow_stochastic_mode
+        mlflow_params["flow_matching.noise_stochastic_perturb_source"] = flow_stochastic_perturb_source
+        mlflow_params["flow_matching.val_rollout_nfe"] = int(flow_val_nfe)
+        mlflow_params["flow_matching.val_num_samples"] = int(flow_val_num_samples)
+        mlflow_params["flow_matching.val_deterministic"] = bool(flow_val_deterministic)
+        if flow_objective in sfm_objectives:
+            mlflow_params["flow_matching.sfm_sigma_z"] = float(sfm_sigma_z)
+            mlflow_params["flow_matching.sfm_sigma_min"] = float(sfm_sigma_min)
+            mlflow_params["flow_matching.sfm_sigma_max"] = float(sfm_sigma_max)
+            mlflow_params["flow_matching.sfm_adaptive_sigma"] = bool(sfm_adaptive_sigma)
+            mlflow_params["flow_matching.sfm_sigma_ema_beta"] = float(sfm_sigma_ema_beta)
+            mlflow_params["flow_matching.sfm_encoder_reg_lambda"] = float(sfm_encoder_reg_lambda)
     if model_family == "diffusion":
         mlflow_params["loss.diffusion_objective"] = diffusion_objective
 
@@ -543,7 +677,20 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
             autoencoder.load_state_dict(state["autoencoder"])
         optim.load_state_dict(state["optim"])
         if sched and state.get("sched"):
-            sched.load_state_dict(state["sched"])
+            try:
+                sched.load_state_dict(state["sched"])
+            except Exception as e:
+                if _rank0():
+                    print(f"Scheduler resume skipped (state mismatch): {e}")
+        if sched is not None:
+            # Ensure resumed runs continue the scheduler epoch count even if state restore is skipped.
+            try:
+                target_epoch = max(0, start_epoch - 1)
+                sched.last_epoch = target_epoch
+                if hasattr(sched, "_step_count"):
+                    sched._step_count = target_epoch + 1
+            except Exception:
+                pass
         if state.get("scaler") and scaler.is_enabled():
             scaler.load_state_dict(state["scaler"])
         best_metric = state.get("best_metric", best_metric)
@@ -578,6 +725,7 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
         want_vrmse=want_vrmse,
         want_spectral=want_spectral,
         want_endpoint_rmse=want_endpoint_rmse,
+        want_endpoint_prob_metrics=flow_val_prob_metrics,
         monitor_split_es=monitor_split_es,
         monitor_mode_es=monitor_mode_es,
         resume_path=resume_path,
@@ -585,6 +733,7 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
     )
 
     total_pairs_by_gid = _pairs_per_gid_from_dataset(train_ds) if _rank0() else None
+    sfm_state: Dict[str, float] = {"sigma_z_ema": float(sfm_sigma_z)}
 
     interrupted = {"flag": False}
 
@@ -730,13 +879,23 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
                     lr_warmup_start_lr=lr_warmup_start_lr,
                     lr_warmup_phases=lr_warmup_phases,
                     accumulation_steps=accumulation_steps,
+                    flow_stochastic_std=flow_stochastic_std,
+                    flow_stochastic_mode=flow_stochastic_mode,
+                    flow_stochastic_perturb_source=flow_stochastic_perturb_source,
+                    sfm_sigma_z=sfm_sigma_z,
+                    sfm_sigma_min=sfm_sigma_min,
+                    sfm_sigma_max=sfm_sigma_max,
+                    sfm_adaptive_sigma=sfm_adaptive_sigma,
+                    sfm_sigma_ema_beta=sfm_sigma_ema_beta,
+                    sfm_encoder_reg_lambda=sfm_encoder_reg_lambda,
+                    sfm_state=sfm_state,
                 )
         else:
-            train_metrics = _train_one_epoch(
-                epoch=epoch,
-                model=model,
-                train_dl=train_dl,
-                device=device,
+                train_metrics = _train_one_epoch(
+                    epoch=epoch,
+                    model=model,
+                    train_dl=train_dl,
+                    device=device,
                 cond_cfg=cond_cfg,
                 autoencoder=autoencoder,
                 autoencoder_trainable=autoencoder_trainable,
@@ -778,8 +937,18 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
                 lr_warmup_steps=lr_warmup_steps,
                 lr_warmup_start_lr=lr_warmup_start_lr,
                 lr_warmup_phases=lr_warmup_phases,
-                accumulation_steps=accumulation_steps,
-            )
+                    accumulation_steps=accumulation_steps,
+                    flow_stochastic_std=flow_stochastic_std,
+                    flow_stochastic_mode=flow_stochastic_mode,
+                    flow_stochastic_perturb_source=flow_stochastic_perturb_source,
+                    sfm_sigma_z=sfm_sigma_z,
+                    sfm_sigma_min=sfm_sigma_min,
+                    sfm_sigma_max=sfm_sigma_max,
+                    sfm_adaptive_sigma=sfm_adaptive_sigma,
+                    sfm_sigma_ema_beta=sfm_sigma_ema_beta,
+                    sfm_encoder_reg_lambda=sfm_encoder_reg_lambda,
+                    sfm_state=sfm_state,
+                )
         _check_step_sync(train_metrics, device, local_rank)
 
         val_metrics = None
@@ -822,6 +991,20 @@ def main(cfg_path: str, resume_arg: Optional[str] = None):
                 want_spectral=want_spectral,
                 spectral_cfg=spectral_cfg if want_spectral else None,
                 want_endpoint_rmse=want_endpoint_rmse,
+                flow_stochastic_std=flow_stochastic_std,
+                flow_stochastic_mode=flow_stochastic_mode,
+                flow_stochastic_perturb_source=flow_stochastic_perturb_source,
+                flow_val_nfe=flow_val_nfe,
+                flow_val_num_samples=flow_val_num_samples,
+                flow_val_deterministic=flow_val_deterministic,
+                flow_val_prob_metrics=flow_val_prob_metrics,
+                sfm_sigma_z=sfm_sigma_z,
+                sfm_sigma_min=sfm_sigma_min,
+                sfm_sigma_max=sfm_sigma_max,
+                sfm_adaptive_sigma=sfm_adaptive_sigma,
+                sfm_sigma_ema_beta=sfm_sigma_ema_beta,
+                sfm_encoder_reg_lambda=sfm_encoder_reg_lambda,
+                sfm_state=sfm_state,
             )
             if debug_phase_markers:
                 rank_env = int(os.environ.get("RANK", "-1"))

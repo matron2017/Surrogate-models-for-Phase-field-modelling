@@ -66,3 +66,15 @@ Submission status (latest):
    - Set `loss.ae_wavelet.enabled: false` (to align with "no wavelet" baseline).
 4. Run a short gputest PSGD job with `trainer.nan_debug: true` to catch the first bad step.
 5. If PSGD still diverges, switch the long run to AdamW for stability and keep PSGD as a separate ablation.
+
+## Jobs (2026-01-29)
+- SUBMITTED: 31482227 (5 nodes x 4 GPUs, wavelet, multistep110 schedule, effective batch 40).
+  - Config: `train_ae_latent_gpumedium_psgd_uncached_freq1_lola_big_64_1024_12g_latent64_wavelet_multistep110_b40.yaml`
+  - Scheduler: multistep milestones every 110 epochs (110, 220, 330, 440, 550, 660, 770, 880, 990), gamma=0.1.
+  - Warmup: 20 epochs, start LR = 1e-6 -> base LR = 1e-5.
+  - Architecture: 6-stage (~390M params), 16x compression (stage_strides [2,2,2,2,1]).
+- SUBMITTED: 31482228 (5 nodes x 4 GPUs, wavelet, multistep110 schedule, effective batch 20).
+  - Config: `train_ae_latent_gpumedium_psgd_uncached_freq1_lola_big_64_1024_12g_latent64_wavelet_multistep110_b20.yaml`
+  - Scheduler: multistep milestones every 110 epochs (110, 220, 330, 440, 550, 660, 770, 880, 990), gamma=0.1.
+  - Warmup: 20 epochs, start LR = 1e-6 -> base LR = 1e-5.
+  - Architecture: 6-stage (~390M params), 16x compression (stage_strides [2,2,2,2,1]).

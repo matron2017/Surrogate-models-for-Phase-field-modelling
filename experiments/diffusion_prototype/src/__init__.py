@@ -1,0 +1,1 @@
+"""Diffusion prototype source package."""

@@ -215,10 +215,107 @@ def relative_mass_error(u_pred: torch.Tensor,
     """
     mp = total_mass(u_pred, pixel_size=pixel_size)
     mt = total_mass(u_true, pixel_size=pixel_size)
-    return (mp - mt).abs() / (mt.abs() + eps)
+    eps_safe = max(float(eps), 1e-12)
+    return (mp - mt).abs() / mt.abs().clamp_min(eps_safe)
 
 
 # -------------------- auto-correlation (Eq. (1) relative error) --------------------
+
+_RFFT_RADIAL_CACHE: Dict[Tuple[int, int, str, int], Tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def _rfft_radial_bins(H: int, W: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+    key = (H, W, device.type, device.index if device.index is not None else -1)
+    cached = _RFFT_RADIAL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    fy = torch.fft.fftfreq(H, d=1.0, device=device) * H
+    fx = torch.fft.rfftfreq(W, d=1.0, device=device) * W
+    Y, X = torch.meshgrid(fy, fx, indexing="ij")
+    R = torch.sqrt(Y ** 2 + X ** 2)
+    bins = torch.floor(R + 1e-8).to(torch.int64)
+    rmax = int(bins.max().item())
+    counts = torch.bincount(bins.view(-1), minlength=rmax + 1).to(torch.float32)
+    _RFFT_RADIAL_CACHE[key] = (bins, counts)
+    return bins, counts
+
+
+def _radial_mean_rfft(power: torch.Tensor, bins: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+    n = power.shape[0]
+    flat = power.reshape(n, -1)
+    idx = bins.view(1, -1).expand(n, -1)
+    sums = torch.zeros(n, counts.numel(), device=power.device, dtype=power.dtype)
+    sums.scatter_add_(1, idx, flat)
+    denom = counts.to(device=power.device, dtype=power.dtype).clamp_min(1.0)
+    return sums / denom
+
+
+def _log_band_edges(r_max: int, bands: int) -> torch.Tensor:
+    if r_max < 1 or bands < 1:
+        return torch.tensor([1, r_max + 1], dtype=torch.int64)
+    edges = torch.logspace(0, math.log10(r_max + 1), steps=bands + 1, base=10.0)
+    edges = edges.round().clamp(min=1, max=r_max + 1).to(torch.int64)
+    edges = torch.unique(edges)
+    if edges.numel() < 2:
+        return torch.tensor([1, r_max + 1], dtype=torch.int64)
+    if edges[0].item() != 1:
+        edges[0] = 1
+    if edges[-1].item() != r_max + 1:
+        edges = torch.cat([edges, torch.tensor([r_max + 1], dtype=torch.int64)])
+    return edges
+
+
+def spectral_rmse_bands(
+    u_pred: torch.Tensor,
+    u_true: torch.Tensor,
+    bands: int = 3,
+    eps: float = 1e-6,
+) -> Dict[str, torch.Tensor]:
+    if u_pred.dim() == 3:
+        u_pred = u_pred.unsqueeze(1)
+        u_true = u_true.unsqueeze(1)
+    if u_pred.dim() != 4:
+        raise ValueError("Expected (B,C,H,W) or (B,H,W) tensors.")
+    B, C, H, W = u_pred.shape
+    u_pred = u_pred.float()
+    u_true = u_true.float()
+    u_pred = u_pred - u_pred.mean(dim=(-2, -1), keepdim=True)
+    u_true = u_true - u_true.mean(dim=(-2, -1), keepdim=True)
+    Fp = torch.fft.rfft2(u_pred, norm="ortho")
+    Ft = torch.fft.rfft2(u_true, norm="ortho")
+    Pp = (Fp.real ** 2 + Fp.imag ** 2)
+    Pt = (Ft.real ** 2 + Ft.imag ** 2)
+    bins, counts = _rfft_radial_bins(H, W, u_pred.device)
+    Pp_flat = Pp.reshape(B * C, H, -1)
+    Pt_flat = Pt.reshape(B * C, H, -1)
+    spec_p = _radial_mean_rfft(Pp_flat, bins, counts)
+    spec_t = _radial_mean_rfft(Pt_flat, bins, counts)
+    eps_safe = max(float(eps), 1e-12)
+    rel = (spec_p - spec_t) / (spec_t + eps_safe)
+    rmse_all = torch.sqrt((rel ** 2).mean())
+
+    r_max = spec_t.shape[1] - 1
+    edges = _log_band_edges(r_max, bands).to(device=rel.device)
+    r_idx = torch.arange(spec_t.shape[1], device=rel.device)
+    band_rmse = []
+    for i in range(len(edges) - 1):
+        lo = edges[i].item()
+        hi = edges[i + 1].item()
+        mask = (r_idx >= lo) & (r_idx < hi)
+        if mask.any():
+            band_rmse.append(torch.sqrt((rel[:, mask] ** 2).mean()))
+        else:
+            band_rmse.append(torch.tensor(float("nan"), device=rel.device))
+
+    out: Dict[str, torch.Tensor] = {"spec_rmse_all": rmse_all}
+    if bands == 3:
+        names = ["low", "mid", "high"]
+    else:
+        names = [f"band{i}" for i in range(len(band_rmse))]
+    for name, val in zip(names, band_rmse):
+        out[f"spec_rmse_{name}"] = val
+    return out
+
 
 def _fft_autocorr_2d(u: torch.Tensor) -> torch.Tensor:
     """

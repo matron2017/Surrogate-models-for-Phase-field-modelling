@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
+from physicsnemo.models.afno.afno import AFNO
 from models.conditioning.mixed_padding import MixedBCConv2d
 
 
@@ -167,6 +168,72 @@ class BottleneckAttention(nn.Module):
         return x + out
 
 
+class ZeroConv2d(nn.Module):
+    """1x1 conv initialized to zero, used for ControlNet-style safe injection."""
+
+    def __init__(self, in_ch: int, out_ch: int):
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=1)
+        nn.init.zeros_(self.conv.weight)
+        nn.init.zeros_(self.conv.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
+
+
+class ControlPyramid(nn.Module):
+    """Lightweight control branch producing one feature map per UNet level."""
+
+    def __init__(self, in_ch: int, channels: Sequence[int], padding: str = "mixed"):
+        super().__init__()
+        chs = list(channels)
+        if len(chs) < 2:
+            raise ValueError("ControlPyramid requires at least two levels.")
+        self.padding = str(padding)
+        self.pad_mode = "circular" if self.padding == "circular" else "zeros"
+        self.use_mixed = self.padding == "mixed"
+
+        self.blocks = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        cur_in = int(in_ch)
+        for idx, ch in enumerate(chs):
+            if self.use_mixed:
+                block = nn.Sequential(
+                    MixedBCConv2d(cur_in, ch, kernel_size=3),
+                    nn.SiLU(),
+                    MixedBCConv2d(ch, ch, kernel_size=3),
+                    nn.SiLU(),
+                )
+            else:
+                block = nn.Sequential(
+                    nn.Conv2d(cur_in, ch, kernel_size=3, padding=1, padding_mode=self.pad_mode),
+                    nn.SiLU(),
+                    nn.Conv2d(ch, ch, kernel_size=3, padding=1, padding_mode=self.pad_mode),
+                    nn.SiLU(),
+                )
+            self.blocks.append(block)
+            if idx < len(chs) - 1:
+                if self.use_mixed:
+                    self.downs.append(MixedBCConv2d(ch, chs[idx + 1], kernel_size=3, stride=2))
+                else:
+                    self.downs.append(
+                        nn.Conv2d(ch, chs[idx + 1], kernel_size=3, stride=2, padding=1, padding_mode=self.pad_mode)
+                    )
+                cur_in = chs[idx + 1]
+            else:
+                cur_in = ch
+
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        feats: List[torch.Tensor] = []
+        h = x
+        for idx, block in enumerate(self.blocks):
+            h = block(h)
+            feats.append(h)
+            if idx < len(self.downs):
+                h = self.downs[idx](h)
+        return feats
+
+
 # ---- main backbone ----------------------------------------------------------
 @dataclass
 class UNetAttnMetaData(ModelMetaData):
@@ -196,6 +263,14 @@ class UNetFiLMAttn(Module):
         num_blocks: Sequence[int] | None = None,
         bottleneck_blocks: Tuple[int, int] = (2, 2),  # (pre-attn, post-attn)
         attn_heads: int = 8,
+        use_bottleneck_attn: bool = True,
+        afno_depth: int = 0,
+        afno_mlp_ratio: float = 4.0,
+        afno_num_blocks: int = 16,
+        afno_patch_size: int | Sequence[int] = 1,
+        afno_inp_shape: Optional[Sequence[int]] = None,
+        afno_sparsity_threshold: float = 0.01,
+        afno_hard_thresholding_fraction: float = 1.0,
         film_dim: int = 512,
         time_emb_dim: int = 128,
         dropout: float = 0.1,
@@ -203,6 +278,10 @@ class UNetFiLMAttn(Module):
         use_time: bool = True,
         skip_film: bool = True,
         film_mode: str = "additive",  # ReFlow-style additive bias; set "affine" for (1+γ)·x+β
+        use_control_branch: bool = False,
+        hint_channels: int = 1,
+        control_strength: float = 1.0,
+        control_channels: Optional[Sequence[int]] = None,
     ):
         super().__init__(meta=UNetAttnMetaData())
         channels = list(channels) if channels is not None else [48, 96, 192, 256, 384, 512, 512]
@@ -222,6 +301,20 @@ class UNetFiLMAttn(Module):
         self.use_mixed = self.padding == "mixed"
         self.skip_film_enabled = bool(skip_film)
         self.film_mode = film_mode
+        self.use_control_branch = bool(use_control_branch)
+        self.use_bottleneck_attn = bool(use_bottleneck_attn)
+        self.afno_depth = int(afno_depth)
+        self.hint_channels = int(hint_channels)
+        self.default_control_strength = float(control_strength)
+        if self.hint_channels <= 0:
+            raise ValueError("hint_channels must be positive.")
+        if control_channels is None:
+            control_channels = [min(int(ch), 256) for ch in channels]
+        self.control_channels = [int(ch) for ch in control_channels]
+        if len(self.control_channels) != len(channels):
+            raise ValueError("control_channels length must match model channels length.")
+        if any(ch <= 0 for ch in self.control_channels):
+            raise ValueError("control_channels must be positive.")
 
         scalar_dim = cond_dim
         if scalar_dim <= 0:
@@ -274,7 +367,33 @@ class UNetFiLMAttn(Module):
         self.bot_pre = nn.ModuleList(
             [ConvBlock(bot_ch, bot_ch, self.cond_ctx_dim, film_mode=film_mode, dropout=dropout, padding=padding) for _ in range(pre_blocks)]
         )
-        self.bot_attn = BottleneckAttention(bot_ch, heads=attn_heads, dropout=dropout)
+        self.bot_attn = (
+            BottleneckAttention(bot_ch, heads=attn_heads, dropout=dropout)
+            if self.use_bottleneck_attn
+            else nn.Identity()
+        )
+        self.afno_inp_shape = None if afno_inp_shape is None else tuple(int(v) for v in afno_inp_shape)
+        self.bot_afno = None
+        if self.afno_depth > 0:
+            if self.afno_inp_shape is None:
+                raise ValueError("afno_inp_shape must be set when afno_depth > 0.")
+            if isinstance(afno_patch_size, int):
+                afno_patch_size = (afno_patch_size, afno_patch_size)
+            elif len(afno_patch_size) != 2:
+                raise ValueError("afno_patch_size must be an int or length-2 sequence.")
+            self.bot_afno = AFNO(
+                inp_shape=list(self.afno_inp_shape),
+                in_channels=bot_ch,
+                out_channels=bot_ch,
+                patch_size=list(afno_patch_size),
+                embed_dim=bot_ch,
+                depth=self.afno_depth,
+                mlp_ratio=float(afno_mlp_ratio),
+                drop_rate=float(dropout),
+                num_blocks=int(afno_num_blocks),
+                sparsity_threshold=float(afno_sparsity_threshold),
+                hard_thresholding_fraction=float(afno_hard_thresholding_fraction),
+            )
         self.bot_post = nn.ModuleList(
             [ConvBlock(bot_ch, bot_ch, self.cond_ctx_dim, film_mode=film_mode, dropout=dropout, padding=padding) for _ in range(post_blocks)]
         )
@@ -310,6 +429,42 @@ class UNetFiLMAttn(Module):
             self.out_conv = MixedBCConv2d(channels[0], out_channels, kernel_size=3)
         else:
             self.out_conv = nn.Conv2d(channels[0], out_channels, kernel_size=3, padding=1, padding_mode=self.pad_mode)
+
+        # Optional ControlNet-XS style branch for thermal hints.
+        if self.use_control_branch:
+            ctrl_chs = self.control_channels
+            if self.use_mixed:
+                self.input_hint_block = nn.Sequential(
+                    MixedBCConv2d(self.hint_channels, ctrl_chs[0], kernel_size=3),
+                    nn.SiLU(),
+                    MixedBCConv2d(ctrl_chs[0], ctrl_chs[0], kernel_size=3),
+                    nn.SiLU(),
+                )
+            else:
+                self.input_hint_block = nn.Sequential(
+                    nn.Conv2d(self.hint_channels, ctrl_chs[0], kernel_size=3, padding=1, padding_mode=self.pad_mode),
+                    nn.SiLU(),
+                    nn.Conv2d(ctrl_chs[0], ctrl_chs[0], kernel_size=3, padding=1, padding_mode=self.pad_mode),
+                    nn.SiLU(),
+                )
+            self.control_model = ControlPyramid(ctrl_chs[0], ctrl_chs, padding=padding)
+            self.enc_zero_convs_in = nn.ModuleList([ZeroConv2d(c_ctrl, c_model) for c_ctrl, c_model in zip(ctrl_chs, channels)])
+            self.enc_zero_convs_out = nn.ModuleList([ZeroConv2d(c_ctrl, c_model) for c_ctrl, c_model in zip(ctrl_chs, channels)])
+            self.middle_block_in = ZeroConv2d(ctrl_chs[-1], bot_ch)
+            self.middle_block_out = ZeroConv2d(ctrl_chs[-1], bot_ch)
+            dec_ctrl_chs = list(reversed(ctrl_chs[:-1]))
+            dec_model_chs = list(reversed(channels[:-1]))
+            self.dec_zero_convs_in = nn.ModuleList([ZeroConv2d(c_ctrl, c_model) for c_ctrl, c_model in zip(dec_ctrl_chs, dec_model_chs)])
+            self.dec_zero_convs_out = nn.ModuleList([ZeroConv2d(c_ctrl, c_model) for c_ctrl, c_model in zip(dec_ctrl_chs, dec_model_chs)])
+        else:
+            self.input_hint_block = None
+            self.control_model = None
+            self.enc_zero_convs_in = None
+            self.enc_zero_convs_out = None
+            self.middle_block_in = None
+            self.middle_block_out = None
+            self.dec_zero_convs_in = None
+            self.dec_zero_convs_out = None
 
     # ---- conditioning utils -------------------------------------------------
     def _split_cond(
@@ -354,6 +509,47 @@ class UNetFiLMAttn(Module):
         b = b[:, :, None, None]
         return skip * (1 + g) + b
 
+    @staticmethod
+    def _resolve_control_scale(control: Optional[Dict[str, Any]], key: str, idx: Optional[int], default: float) -> float:
+        if not isinstance(control, dict):
+            return float(default)
+        base = float(control.get("strength", default))
+        val = control.get(key, None)
+        if val is None:
+            return base
+        if isinstance(val, (list, tuple)):
+            if idx is None:
+                return float(base)
+            if idx < 0 or idx >= len(val):
+                raise ValueError(f"control['{key}'] has length {len(val)} but idx={idx} was requested.")
+            return float(val[idx])
+        return float(val)
+
+    def _apply_control_delta(
+        self,
+        x: torch.Tensor,
+        delta: torch.Tensor,
+        control: Optional[Dict[str, Any]],
+        key: str,
+        idx: Optional[int],
+    ) -> torch.Tensor:
+        if delta.shape[-2:] != x.shape[-2:]:
+            delta = F.interpolate(delta, size=x.shape[-2:], mode="bilinear", align_corners=False)
+        scale = self._resolve_control_scale(control, key, idx, self.default_control_strength)
+        if scale == 0.0:
+            return x
+        return x + scale * delta
+
+    def _apply_bot_afno(self, x: torch.Tensor) -> torch.Tensor:
+        if self.bot_afno is None:
+            return x
+        if self.afno_inp_shape is not None and x.shape[-2:] != self.afno_inp_shape:
+            raise ValueError(
+                "AFNO bottleneck input spatial size mismatch. "
+                f"Expected {self.afno_inp_shape}, got {tuple(x.shape[-2:])}."
+            )
+        return self.bot_afno(x)
+
     def _split_args(
         self, cond_vec: Optional[torch.Tensor], args: Tuple[torch.Tensor, ...]
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -389,6 +585,13 @@ class UNetFiLMAttn(Module):
     def forward(self, x: torch.Tensor, cond_vec: Optional[torch.Tensor] = None, *args, **kwargs) -> torch.Tensor:
         # region_info or other aux kwargs are ignored; kept for trainer API compatibility.
         kwargs.pop("region_info", None)
+        hint = kwargs.pop("hint", None)
+        if hint is None:
+            hint = kwargs.pop("theta", None)
+        control = kwargs.pop("control", None)
+        if kwargs:
+            # Keep forward permissive for trainer compatibility.
+            kwargs.clear()
         cond_vec, timestep = self._split_args(cond_vec, args)
 
         scalars, t = self._split_cond(cond_vec, timestep)
@@ -399,12 +602,52 @@ class UNetFiLMAttn(Module):
         if self.skip_films is not None:
             skip_gb = [lin(scalar_ctx) for lin in self.skip_films]
 
+        control_feats: Optional[List[torch.Tensor]] = None
+        dec_control_feats: Optional[List[torch.Tensor]] = None
+        if hint is not None:
+            if not self.use_control_branch:
+                raise ValueError(
+                    "Received hint/theta but use_control_branch is disabled. "
+                    "Enable model.params.use_control_branch=true to use ControlNet-style thermal conditioning."
+                )
+            if hint.dim() != 4:
+                raise ValueError(f"hint must be [B,C,H,W], got {tuple(hint.shape)}")
+            if hint.shape[1] != self.hint_channels:
+                raise ValueError(
+                    f"hint channels mismatch: got {hint.shape[1]}, expected {self.hint_channels}."
+                )
+            if hint.shape[-2:] != x.shape[-2:]:
+                hint = F.interpolate(hint, size=x.shape[-2:], mode="bilinear", align_corners=False)
+            assert self.input_hint_block is not None
+            assert self.control_model is not None
+            hint_feats = self.input_hint_block(hint)
+            control_feats = self.control_model(hint_feats)
+            dec_control_feats = list(reversed(control_feats[:-1]))
+
         # Encoder
         x = self.in_conv(x)
         skips: List[torch.Tensor] = []
         for idx, blocks in enumerate(self.enc_blocks):
+            if control_feats is not None:
+                assert self.enc_zero_convs_in is not None
+                x = self._apply_control_delta(
+                    x,
+                    self.enc_zero_convs_in[idx](control_feats[idx]),
+                    control=control,
+                    key="enc_in_scales",
+                    idx=idx,
+                )
             for block in blocks:
                 x = block(x, film_ctx)
+            if control_feats is not None:
+                assert self.enc_zero_convs_out is not None
+                x = self._apply_control_delta(
+                    x,
+                    self.enc_zero_convs_out[idx](control_feats[idx]),
+                    control=control,
+                    key="enc_out_scales",
+                    idx=idx,
+                )
             if skip_gb is not None and idx < len(skip_gb):
                 skip = self._apply_skip_film(x, skip_gb[idx])
             else:
@@ -415,20 +658,57 @@ class UNetFiLMAttn(Module):
                 x = self.downs[idx](x)
 
         # Bottleneck
+        if control_feats is not None:
+            assert self.middle_block_in is not None
+            x = self._apply_control_delta(
+                x,
+                self.middle_block_in(control_feats[-1]),
+                control=control,
+                key="mid_in_scale",
+                idx=None,
+            )
         for block in self.bot_pre:
             x = block(x, film_ctx)
         x = self.bot_attn(x)
+        x = self._apply_bot_afno(x)
         for block in self.bot_post:
             x = block(x, film_ctx)
+        if control_feats is not None:
+            assert self.middle_block_out is not None
+            x = self._apply_control_delta(
+                x,
+                self.middle_block_out(control_feats[-1]),
+                control=control,
+                key="mid_out_scale",
+                idx=None,
+            )
 
         # Decoder (use skips except bottleneck)
-        for up, dec_blocks, skip in zip(self.up_convs, self.dec_blocks, reversed(skips)):
+        for didx, (up, dec_blocks, skip) in enumerate(zip(self.up_convs, self.dec_blocks, reversed(skips))):
             x = up(x)
             if x.shape[-2:] != skip.shape[-2:]:
                 x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+            if dec_control_feats is not None:
+                assert self.dec_zero_convs_in is not None
+                x = self._apply_control_delta(
+                    x,
+                    self.dec_zero_convs_in[didx](dec_control_feats[didx]),
+                    control=control,
+                    key="dec_in_scales",
+                    idx=didx,
+                )
             x = torch.cat([x, skip], dim=1)
             for block in dec_blocks:
                 x = block(x, film_ctx)
+            if dec_control_feats is not None:
+                assert self.dec_zero_convs_out is not None
+                x = self._apply_control_delta(
+                    x,
+                    self.dec_zero_convs_out[didx](dec_control_feats[didx]),
+                    control=control,
+                    key="dec_out_scales",
+                    idx=didx,
+                )
 
         x = self.out_act(self.out_norm(x))
         return self.out_conv(x)

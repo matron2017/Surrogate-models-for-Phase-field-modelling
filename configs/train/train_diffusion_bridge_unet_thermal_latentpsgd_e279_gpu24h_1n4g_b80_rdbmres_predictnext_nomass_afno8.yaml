@@ -1,0 +1,179 @@
+train:
+  model_family: diffusion
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    data_key: latent_images
+    input_channels: all
+    target_channels: all
+    identity_pairs: false
+    use_pairs_idx: true
+    add_thermal: true
+    thermal_axis: x
+    thermal_use_x0: true
+    thermal_on_target: false
+    thermal_require_precomputed: true
+    return_cond: false
+    normalize_images: false
+    normalize_force: false
+    normalize_source: file
+  train_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+    augment_rotate: false
+    augment_rotate_prob: 0.0
+    augment_flip: false
+    augment_swap: false
+    augment_roll: false
+  val_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+model:
+  backbone: unet_bottleneck_attn
+  params:
+    in_channels: 64
+    out_channels: 32
+    cond_dim: 1
+    channels:
+    - 192
+    - 384
+    - 768
+    - 1024
+    num_blocks:
+    - 2
+    - 2
+    - 2
+    - 2
+    bottleneck_blocks:
+    - 2
+    - 2
+    attn_heads: 8
+    use_bottleneck_attn: false
+    afno_depth: 12
+    afno_inp_shape:
+    - 8
+    - 8
+    afno_patch_size: 1
+    afno_num_blocks: 16
+    afno_mlp_ratio: 8.0
+    afno_sparsity_threshold: 0.01
+    afno_hard_thresholding_fraction: 1.0
+    film_dim: 512
+    time_emb_dim: 128
+    dropout: 0.0
+    padding: mixed
+    use_time: true
+    skip_film: true
+    film_mode: affine
+    use_control_branch: true
+    hint_channels: 1
+    control_strength: 1.0
+diffusion:
+  noise_schedule: unidb_cosine
+  timestep_sampler: uniform
+  schedule_kwargs:
+    timesteps: 20
+    lambda_square: 30.0
+    gamma_inv: 1.0e-06
+    eps: 0.005
+    input_mode: delta_source_concat
+    residual_mode: abs
+    residual_normalize: true
+    residual_scale: 0.25
+    residual_power: 0.5
+    residual_clip: 10.0
+    residual_eps: 0.001
+    residual_pi_floor: 0.0
+  sampler_kwargs:
+    t_min: 1
+    t_max: 20
+    include_terminal_unidb: false
+  dt: 1.0
+  n_steps: 1
+  thermal_bc: dirichlet
+  record_trajectory: false
+loss:
+  base: mse
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.0
+  diffusion_objective: unidb_predict_next
+  diffusion_matching_loss: l2
+  physics_aux:
+    enabled: false
+    pixel_weight: 0.0
+    concentration_mean_weight: 0.0
+    concentration_channels:
+    - 1
+    mass_rel_weight: 0.0
+    mass_channels:
+    - 1
+    sub_batch_size: 1
+  diffusion_weighting:
+    kind: none
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+conditioning:
+  enabled: false
+  use_theta: true
+  theta_channels: 1
+  theta_normalization: affine
+  theta_shift: 902.0
+  theta_scale: 20.0
+  theta_eps: 1.0e-06
+loader:
+  batch_size: 20
+  num_workers: 4
+  pin_memory: true
+trainer:
+  seed: 1
+  deterministic: true
+  device: cuda
+  epochs: 400
+  accumulation_steps: 1
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/diffusion_bridge_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b80_rdbmres_predictnext_nomass_afno8
+  grad_clip: 1.0
+  resume: false
+  amp:
+    enabled: true
+    dtype: fp16
+  channels_last: false
+  metrics:
+    mae: true
+    psnr: true
+    vrmse: true
+    spectral_rmse: true
+    endpoint_rmse: true
+    spectral_train: false
+  early_stop:
+    enabled: false
+    split: val
+    mode: min
+    metric: endpoint_rmse
+  use_wavelet_weights: false
+optim:
+  name: adam
+  lr: 0.0001
+  weight_decay: 0.0
+  betas:
+  - 0.9
+  - 0.999
+sched:
+  name: multistep
+  # LR decay only once after warm-up period
+  milestones:
+  - 200
+  gamma: 0.5
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+mlflow:
+  enabled: false

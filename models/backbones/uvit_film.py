@@ -173,6 +173,47 @@ class BottleneckAttention(nn.Module):
         return out
 
 
+class ThermalPyramidMapper(nn.Module):
+    """Maps a thermal field to a feature pyramid aligned with U-ViT stages."""
+
+    def __init__(self, in_channels: int, stage_channels: Sequence[int], hidden: int = 64):
+        super().__init__()
+        if len(stage_channels) == 0:
+            raise ValueError("stage_channels must be non-empty.")
+        self.stage_channels = list(stage_channels)
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, hidden, 3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(hidden, hidden, 3, padding=1),
+            nn.SiLU(),
+        )
+        self.downs = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(hidden, hidden, 3, stride=2, padding=1),
+                    nn.SiLU(),
+                    nn.Conv2d(hidden, hidden, 3, padding=1),
+                    nn.SiLU(),
+                )
+                for _ in range(len(stage_channels) - 1)
+            ]
+        )
+        self.projs = nn.ModuleList([nn.Conv2d(hidden, ch, 1) for ch in stage_channels])
+
+    def forward(self, theta: torch.Tensor, target_hw: Tuple[int, int]) -> Tuple[torch.Tensor, ...]:
+        if theta.dim() != 4:
+            raise ValueError(f"Expected thermal map [B,C,H,W], got {tuple(theta.shape)}")
+        if theta.shape[-2:] != target_hw:
+            theta = F.interpolate(theta, size=target_hw, mode="bilinear", align_corners=False)
+
+        h = self.stem(theta)
+        feats = [self.projs[0](h)]
+        for i, down in enumerate(self.downs):
+            h = down(h)
+            feats.append(self.projs[i + 1](h))
+        return tuple(feats)
+
+
 @dataclass
 class UVitMetaData(ModelMetaData):
     name: str = "UVit_FiLM_Velocity"
@@ -204,6 +245,10 @@ class UVitFiLMVelocity(Module):
         dropout: float = 0.0,
         attn_pool: int = 1,
         attn_max_tokens: Optional[int] = None,
+        use_theta: bool = False,
+        theta_in_ch: int = 1,
+        theta_mode: str = "film",
+        theta_hidden: int = 64,
     ):
         super().__init__(meta=UVitMetaData())
         channels = list(channels) if channels is not None else [64, 128, 256]
@@ -212,6 +257,10 @@ class UVitFiLMVelocity(Module):
         self.cond_dim = cond_dim
         self.film_dim = film_dim
         self.padding = padding
+        self.use_theta = bool(use_theta)
+        self.theta_mode = str(theta_mode).lower()
+        if self.theta_mode not in {"film", "add"}:
+            raise ValueError("theta_mode must be one of {'film', 'add'}.")
 
         self.time_mlp = nn.Sequential(
             nn.Linear(film_dim, film_dim),
@@ -252,12 +301,64 @@ class UVitFiLMVelocity(Module):
         self.out_act = nn.SiLU()
         self.out_conv = nn.Conv2d(channels[0], out_channels, 3, padding=1, padding_mode=("circular" if padding == "circular" else "zeros"))
 
+        if self.use_theta:
+            self.theta_mapper = ThermalPyramidMapper(theta_in_ch, channels, hidden=theta_hidden)
+
+            def _make_mod(ch: int) -> nn.Module:
+                out_ch = 2 * ch if self.theta_mode == "film" else ch
+                return nn.Conv2d(ch, out_ch, kernel_size=1)
+
+            self.theta_enc_mod = nn.ModuleList([_make_mod(ch) for ch in channels])
+            self.theta_dec_mod = nn.ModuleList([_make_mod(channels[i]) for i in reversed(range(len(channels) - 1))])
+        else:
+            self.theta_mapper = None
+            self.theta_enc_mod = None
+            self.theta_dec_mod = None
+
+    @staticmethod
+    def _is_time(tensor: torch.Tensor) -> bool:
+        return tensor.dim() <= 1 or (tensor.dim() == 2 and tensor.shape[1] == 1)
+
+    def _split_args(
+        self, cond_vec: Optional[torch.Tensor], args: Tuple[torch.Tensor, ...]
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Supports:
+          - forward(x, cond)
+          - forward(x, cond, t)
+          - forward(x, t, cond)
+        """
+        if len(args) == 0:
+            return cond_vec, None
+        if len(args) == 1:
+            extra = args[0]
+            if cond_vec is not None and self._is_time(cond_vec) and not self._is_time(extra):
+                return extra, cond_vec
+            return cond_vec, extra
+        if len(args) == 2:
+            a, b = args
+            if self._is_time(a) and not self._is_time(b):
+                return b, a
+            if self._is_time(b) and not self._is_time(a):
+                return a, b
+            return a, b
+        raise TypeError(f"UVitFiLMVelocity.forward expected at most 3 positional args, got {2 + len(args)}")
+
     def _build_ctx(self, cond: torch.Tensor) -> torch.Tensor:
         """
         cond: [B, cond_dim] where the last entry is time.
         Returns FiLM context [B, film_dim].
         """
-        if cond.dim() != 2 or cond.shape[1] != self.cond_dim:
+        if cond.dim() != 2:
+            raise ValueError(f"Expected cond to be 2D [B,C], got {tuple(cond.shape)}")
+        if self.cond_dim == 0:
+            # Scalar conditioning is disabled in the active trainer, but diffusion/flow
+            # still pass timesteps. If present, use the last column as time.
+            if cond.shape[1] >= 1:
+                t = cond[:, -1]
+                return self.time_mlp(_sinusoidal_embedding(t, self.film_dim))
+            return cond.new_zeros((cond.shape[0], self.film_dim))
+        if cond.shape[1] != self.cond_dim:
             raise ValueError(f"Expected cond shape [B,{self.cond_dim}], got {cond.shape}")
         t = cond[:, -1]
         t_emb = self.time_mlp(_sinusoidal_embedding(t, self.film_dim))
@@ -268,21 +369,99 @@ class UVitFiLMVelocity(Module):
             ctx = t_emb
         return ctx
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+    def _apply_theta_mod(self, x: torch.Tensor, theta_feat: Optional[torch.Tensor], mod: Optional[nn.Module]) -> torch.Tensor:
+        if theta_feat is None or mod is None:
+            return x
+        if theta_feat.shape[-2:] != x.shape[-2:]:
+            theta_feat = F.interpolate(theta_feat, size=x.shape[-2:], mode="bilinear", align_corners=False)
+        if self.theta_mode == "film":
+            gamma, beta = mod(theta_feat).chunk(2, dim=1)
+            return x * (1.0 + gamma) + beta
+        return x + mod(theta_feat)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        cond: Optional[torch.Tensor] = None,
+        *args,
+        theta: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
         """
         x: [B, C_in, H, W]
         cond: [B, cond_dim] (includes time as last entry)
         """
-        ctx = self._build_ctx(cond)
+        kwargs.pop("region_info", None)
+        if "theta" in kwargs:
+            theta = kwargs.pop("theta")
+        extra_state: Optional[torch.Tensor] = None
+        remaining_args = args
+        # Support flow-style calls: model(x_t, t, x_cond, theta).
+        if cond is not None and self._is_time(cond) and len(args) > 0 and isinstance(args[0], torch.Tensor) and args[0].dim() == 4:
+            extra_state = args[0]
+            remaining_args = args[1:]
+            if theta is None and len(remaining_args) > 0 and isinstance(remaining_args[0], torch.Tensor) and remaining_args[0].dim() == 4:
+                theta = remaining_args[0]
+                remaining_args = remaining_args[1:]
+
+        cond_vec, timestep = self._split_args(cond, remaining_args)
+        if cond_vec is None and timestep is None:
+            if self.cond_dim == 0:
+                cond_vec = x.new_zeros((x.shape[0], 0))
+            else:
+                cond_vec = x.new_zeros((x.shape[0], self.cond_dim))
+        if cond_vec is None:
+            if self.cond_dim not in {0, 1}:
+                raise ValueError(f"cond_dim={self.cond_dim} requires a conditioning vector.")
+            cond_vec = timestep.view(timestep.shape[0], -1)
+            timestep = None
+        if timestep is not None:
+            t = timestep.view(timestep.shape[0], -1)
+            if cond_vec.dim() != 2:
+                raise ValueError(f"Expected cond vector [B,C], got {tuple(cond_vec.shape)}.")
+            if cond_vec.shape[1] == self.cond_dim:
+                # Cond already includes time; ignore timestep.
+                pass
+            elif cond_vec.shape[1] == self.cond_dim - 1:
+                cond_vec = torch.cat([cond_vec, t], dim=1)
+            else:
+                raise ValueError(
+                    f"cond has {cond_vec.shape[1]} dims but expected {self.cond_dim - 1} (+time) or {self.cond_dim}."
+                )
+        if cond_vec.dim() != 2 or (self.cond_dim > 0 and cond_vec.shape[1] != self.cond_dim):
+            raise ValueError(f"Expected cond shape [B,{self.cond_dim}], got {tuple(cond_vec.shape)}.")
+
+        if (
+            extra_state is not None
+            and extra_state.shape[0] == x.shape[0]
+            and extra_state.shape[-2:] == x.shape[-2:]
+            and x.shape[1] + extra_state.shape[1] == self.in_channels
+        ):
+            x = torch.cat([x, extra_state], dim=1)
+
+        ctx = self._build_ctx(cond_vec)
         skips: List[torch.Tensor] = []
+        theta_feats: Optional[Tuple[torch.Tensor, ...]] = None
+        theta_dec_feats: Tuple[torch.Tensor, ...] = ()
+        if self.use_theta:
+            if theta is None:
+                raise ValueError("use_theta=True requires a thermal map via theta=...")
+            if self.theta_mapper is None or self.theta_enc_mod is None or self.theta_dec_mod is None:
+                raise RuntimeError("Theta modules are not initialized.")
+            theta_feats = self.theta_mapper(theta, target_hw=x.shape[-2:])
+            theta_dec_feats = tuple(theta_feats[-2::-1])
 
         h = self.in_conv(x)
+        if theta_feats is not None:
+            h = self._apply_theta_mod(h, theta_feats[0], self.theta_enc_mod[0])
         # encoder blocks + downsample
         for idx, block in enumerate(self.enc_blocks):
             h = block(h, ctx)
             if idx < len(self.downs):
                 skips.append(h)
                 h = self.downs[idx](h, ctx)
+                if theta_feats is not None:
+                    h = self._apply_theta_mod(h, theta_feats[idx + 1], self.theta_enc_mod[idx + 1])
 
         # bottleneck attention
         h = self.attn(h)
@@ -291,6 +470,8 @@ class UVitFiLMVelocity(Module):
         for idx, up in enumerate(self.ups):
             skip = skips[-(idx + 1)]
             h = up(h, skip, ctx)
+            if theta_feats is not None:
+                h = self._apply_theta_mod(h, theta_dec_feats[idx], self.theta_dec_mod[idx])
 
         h = self.out_norm(h)
         h = self.out_act(h)

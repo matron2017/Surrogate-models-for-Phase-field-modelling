@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import h5py
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,7 @@ def _make_mock_pf_file(
     with_weights: bool = False,
     weight_channels: int = 2,
     include_dt_norm: bool = True,
+    include_thermal_field: bool = False,
 ) -> Path:
     T, C, H, W = 3, 4, 6, 5
     pairs_idx = np.array([[0, 1], [1, 2]], dtype=np.int64)
@@ -34,6 +36,14 @@ def _make_mock_pf_file(
         g.create_dataset("thermal_gradient_series_norm", data=grad_series)
         g.create_dataset("images", data=images)
         g.attrs["effective_dt"] = 1.0
+        g.attrs["dx"] = 1.0
+        g.attrs["thermal_gradient_raw"] = 2.0
+        g.attrs["pulling_speed"] = 0.0
+        g.attrs["x0_dx"] = 0.0
+        g.attrs["x_min"] = 0.0
+        g.attrs["x_max"] = float(W)
+        g.attrs["y_min"] = 0.0
+        g.attrs["y_max"] = float(H)
         g.create_dataset("times", data=times)
         g.create_dataset("time_phys", data=time_phys)
         g.create_dataset("time_phys_norm", data=time_norm)
@@ -42,6 +52,9 @@ def _make_mock_pf_file(
         g.attrs["zscore_eps_time"] = 1e-12
         if include_dt_norm:
             g.create_dataset("pairs_dt_norm", data=pairs_dt)
+        if include_thermal_field:
+            thermal = np.full((T, 1, H, W), 5.0, dtype=np.float32)
+            g.create_dataset("thermal_field", data=thermal)
 
     if with_weights:
         weight_path = path.with_name(path.stem + "_weights.h5")
@@ -68,8 +81,7 @@ def test_pf_pair_dataset_shapes(tmp_path):
     sample = ds[0]
     assert sample["input"].shape == (2, 6, 5)
     assert sample["target"].shape == (2, 6, 5)
-    assert sample["cond"].shape == (2,)
-    assert torch.allclose(sample["cond"], torch.tensor([0.0, 0.0], dtype=torch.float32), atol=1e-6)
+    assert "cond" not in sample
 
 
 def test_pf_pair_dataset_includes_weights(tmp_path):
@@ -87,8 +99,7 @@ def test_pf_pair_dataset_includes_weights(tmp_path):
     sample = ds[0]
     assert "weight" in sample
     assert sample["weight"].shape == (1, 6, 5)
-    # pair 0 -> j=1 uses time_phys_norm[1] == 0.0
-    assert torch.allclose(sample["cond"], torch.tensor([0.0, 0.0], dtype=torch.float32), atol=1e-6)
+    assert "cond" not in sample
 
 
 def test_pf_pair_dataset_time_fallback(tmp_path):
@@ -103,7 +114,59 @@ def test_pf_pair_dataset_time_fallback(tmp_path):
     )
 
     sample = ds[1]
-    assert sample["cond"].shape == (2,)
-    # pair 1 -> j=2 uses time_phys_norm[2] = (0.5 - 0.25) / std = 1.2247449...
-    assert torch.allclose(sample["cond"][0], torch.tensor(1.2247449, dtype=torch.float32), atol=1e-5)
-    assert torch.isfinite(sample["cond"]).all()
+    assert sample["input"].shape == (1, 6, 5)
+    assert sample["target"].shape == (1, 6, 5)
+    assert "cond" not in sample
+
+
+def test_pf_pair_dataset_adds_thermal_channel(tmp_path):
+    main_path = tmp_path / "pf_mock_thermal.h5"
+    _make_mock_pf_file(main_path)
+
+    ds = PFPairDataset(
+        h5_path=str(main_path),
+        input_channels=[0, 1],
+        target_channels=[2, 3],
+        limit_per_group=1,
+        add_thermal=True,
+        return_cond=False,
+        thermal_on_target=False,
+    )
+
+    sample = ds[0]
+    assert "cond" not in sample
+    assert sample["input"].shape == (3, 6, 5)
+    assert sample["target"].shape == (2, 6, 5)
+    # Thermal map is linear in x with G=2.0 and x centers starting at 0.5.
+    assert torch.allclose(sample["input"][-1, 0, 0], torch.tensor(1.0), atol=1e-6)
+
+
+def test_pf_pair_dataset_uses_precomputed_thermal(tmp_path):
+    main_path = tmp_path / "pf_mock_thermal_pre.h5"
+    _make_mock_pf_file(main_path, include_thermal_field=True)
+
+    ds = PFPairDataset(
+        h5_path=str(main_path),
+        input_channels=[0, 1],
+        target_channels=[2, 3],
+        limit_per_group=1,
+        add_thermal=True,
+        return_cond=False,
+    )
+
+    sample = ds[0]
+    assert sample["input"].shape[0] == 3
+    assert torch.allclose(sample["input"][-1], torch.full((6, 5), 5.0, dtype=torch.float32))
+
+
+def test_pf_pair_dataset_rejects_return_cond_true(tmp_path):
+    main_path = tmp_path / "pf_mock_no_scalar.h5"
+    _make_mock_pf_file(main_path)
+
+    with pytest.raises(ValueError, match="return_cond=True is no longer supported"):
+        PFPairDataset(
+            h5_path=str(main_path),
+            input_channels=[0],
+            target_channels=[1],
+            return_cond=True,
+        )

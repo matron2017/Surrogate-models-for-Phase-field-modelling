@@ -1,0 +1,142 @@
+train:
+  model_family: diffusion
+
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+
+dataloader:
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    data_key: latent_images
+    input_channels: "all"
+    target_channels: "all"
+    identity_pairs: false
+    use_pairs_idx: true
+    add_thermal: true
+    thermal_axis: x
+    thermal_use_x0: true
+    thermal_on_target: false
+    thermal_require_precomputed: true
+    return_cond: false
+    normalize_images: false
+    normalize_force: false
+    normalize_source: file
+  train_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+    augment_rotate: false
+    augment_rotate_prob: 0.0
+    augment_flip: false
+    augment_swap: false
+    augment_roll: false
+  val_args:
+    limit_per_group: null
+    max_items: null
+    augment: false
+
+model:
+  backbone: unet_bottleneck_attn
+  params:
+    in_channels: 64
+    out_channels: 32
+    cond_dim: 1
+    channels: [192, 384, 768, 1024]
+    num_blocks: [2, 2, 2, 2]
+    bottleneck_blocks: [2, 2]
+    attn_heads: 8
+    film_dim: 512
+    time_emb_dim: 128
+    dropout: 0.0
+    padding: mixed
+    use_time: false
+    skip_film: true
+    film_mode: additive
+
+diffusion:
+  noise_schedule: unidb_cosine
+  timestep_sampler: uniform
+  schedule_kwargs:
+    timesteps: 20
+    lambda_square: 30.0
+    gamma_inv: 0.0
+    eps: 0.005
+    input_mode: delta_source_concat
+  sampler_kwargs:
+    t_min: 1
+    t_max: 20
+  dt: 1.0
+  n_steps: 1
+  thermal_bc: dirichlet
+  record_trajectory: false
+
+loss:
+  base: mse
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.0
+  diffusion_objective: unidb_reverse_step
+  diffusion_matching_loss: l1
+  diffusion_weighting:
+    kind: none
+
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+
+conditioning:
+  enabled: false
+  use_theta: true
+  theta_channels: 1
+  theta_normalization: affine
+  theta_shift: 902.0
+  theta_scale: 20.0
+  theta_eps: 1.0e-6
+
+loader:
+  batch_size: 1
+  num_workers: 4
+  pin_memory: true
+
+trainer:
+  seed: 1
+  deterministic: true
+  device: cuda
+  epochs: 200
+  accumulation_steps: 20
+  use_val: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/diffusion_bridge_unet_thermal_latentbest213_gpu2h_1gpu_8x8_212m
+  grad_clip: 1.0
+  resume: false
+  amp:
+    enabled: true
+    dtype: fp16
+  channels_last: false
+  metrics:
+    mae: true
+    psnr: true
+    vrmse: true
+    spectral_rmse: false
+    spectral_train: false
+  early_stop:
+    enabled: false
+  use_wavelet_weights: false
+
+optim:
+  name: adam
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine
+  T_max: 200
+  eta_min: 1.0e-6
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+
+mlflow:
+  enabled: false

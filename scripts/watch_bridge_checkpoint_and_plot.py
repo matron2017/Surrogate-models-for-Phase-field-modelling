@@ -12,8 +12,21 @@ import torch
 
 
 def _read_epoch(ckpt_path: Path) -> int:
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    return int(ckpt.get("epoch", -1))
+    last_err: Exception | None = None
+    for _ in range(4):
+        try:
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            return int(ckpt.get("epoch", -1))
+        except Exception as e:
+            last_err = e
+            print(
+                f"[watch] failed reading epoch from {ckpt_path}: {type(e).__name__}: {e}",
+                flush=True,
+            )
+            time.sleep(2.0)
+    if last_err is not None:
+        print(f"[watch] checkpoint read failed permanently: {ckpt_path}: {last_err}", flush=True)
+    return -1
 
 
 def _epoch_sort_key(path: Path) -> int:
@@ -103,10 +116,8 @@ def main() -> None:
             mtime = ckpt_last.stat().st_mtime
             if mtime > last_mtime:
                 last_mtime = mtime
-                try:
-                    epoch = _read_epoch(ckpt_last)
-                except Exception as e:
-                    print(f"[watch] failed reading epoch from {ckpt_last}: {e}", flush=True)
+                epoch = _read_epoch(ckpt_last)
+                if epoch < 0:
                     time.sleep(max(1, int(args.poll_seconds)))
                     continue
                 if epoch in seen_epochs:
@@ -133,7 +144,7 @@ def main() -> None:
                 print(f"[watch] epoch={epoch} plotting to {epoch_out}", flush=True)
                 rc = subprocess.call(cmd)
                 print(f"[watch] epoch={epoch} plot exit code={rc}", flush=True)
-                _sync_latest_plots(out_root=out_root, latest_root=latest_root, max_epochs=int(args.latest_max_epochs))
+                _sync_latest_plots(run_root=out_root, latest_root=latest_root, max_epochs=int(args.latest_max_epochs))
         else:
             now = time.time()
             if (

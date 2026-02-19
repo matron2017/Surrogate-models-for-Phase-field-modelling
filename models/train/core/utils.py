@@ -114,42 +114,59 @@ def _collate(batch: List[Mapping[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def _extract_cond_from_channels(x: torch.Tensor, cond_dim: int) -> Tuple[torch.Tensor, torch.Tensor]:
-    # x: [B,C,H,W]; last cond_dim channels are replicated scalars per sample
-    assert x.dim() == 4 and x.size(1) >= cond_dim
-    cond_map = x[:, -cond_dim:, ...]  # [B,cond_dim,H,W]
-    cond_vec = cond_map.mean(dim=(-2, -1))  # [B,cond_dim]
-    x_trim = x[:, :-cond_dim, ...]  # [B,C-cond_dim,H,W]
-    return x_trim, cond_vec
-
-
 def _prepare_batch(batch: Dict[str, torch.Tensor], device, cond_cfg, use_chlast: bool):
     """
     Move a batch to device, split conditioning if requested, and enforce channels_last if enabled.
-    Returns (x, y, cond_vec).
+    Returns (x, y, cond_vec, theta_field).
     """
     x = batch["input"].to(device, non_blocking=True)
     y = batch["target"].to(device, non_blocking=True)
 
     cond = None
-    if cond_cfg.get("enabled", True):
-        source = str(cond_cfg.get("source", "field")).lower()
-        cd = int(cond_cfg.get("cond_dim", 2))
-        if source == "channels":
-            if x.dim() == 3:
-                raise AssertionError("Expected batched input for channels-based conditioning")
-            x, cond = _extract_cond_from_channels(x, cd)
+    theta = None
+    if cond_cfg.get("use_theta", False):
+        theta_channels = int(cond_cfg.get("theta_channels", 1))
+        if x.dim() != 4:
+            raise AssertionError("Expected batched input for theta conditioning.")
+        if x.size(1) <= theta_channels:
+            raise ValueError(f"Input has {x.size(1)} channels but theta_channels={theta_channels}.")
+        theta = x[:, -theta_channels:, ...]
+        x = x[:, :-theta_channels, ...]
+        if y.dim() == 4 and y.size(1) > x.size(1) and (y.size(1) - x.size(1) == theta_channels):
+            y = y[:, :-theta_channels, ...]
+
+        theta_norm = str(cond_cfg.get("theta_normalization", "none")).strip().lower()
+        theta_eps = float(cond_cfg.get("theta_eps", 1e-6))
+        if theta_norm in {"sample_zscore", "zscore_per_sample"}:
+            mean = theta.mean(dim=(-2, -1), keepdim=True)
+            std = theta.std(dim=(-2, -1), keepdim=True, unbiased=False).clamp_min(theta_eps)
+            theta = (theta - mean) / std
+        elif theta_norm in {"affine", "global_affine"}:
+            theta_shift = float(cond_cfg.get("theta_shift", 0.0))
+            theta_scale = float(cond_cfg.get("theta_scale", 1.0))
+            if abs(theta_scale) < theta_eps:
+                raise ValueError(f"conditioning.theta_scale must have |scale| >= theta_eps ({theta_eps}).")
+            theta = (theta - theta_shift) / theta_scale
+        elif theta_norm in {"none", ""}:
+            pass
         else:
-            if "cond" not in batch:
-                raise KeyError("Conditioning enabled but 'cond' missing in batch.")
-            cond_t = batch["cond"].to(device, non_blocking=True)
-            assert cond_t.dim() == 2 and cond_t.size(1) == cd
-            cond = cond_t
+            raise ValueError(
+                f"Unknown conditioning.theta_normalization='{theta_norm}'. "
+                "Use one of {'none','sample_zscore','affine'}."
+            )
+
+    if cond_cfg.get("enabled", False):
+        raise ValueError(
+            "Scalar conditioning has been removed from the active training path. "
+            "Set conditioning.enabled=false and use conditioning.use_theta with add_thermal."
+        )
 
     if use_chlast:
         x = x.contiguous(memory_format=torch.channels_last)
+        if theta is not None:
+            theta = theta.contiguous(memory_format=torch.channels_last)
 
-    return x, y, cond
+    return x, y, cond, theta
 
 
 def _flatten_dict(prefix: str, obj: Any, out: Dict[str, Any]):
@@ -197,6 +214,53 @@ def _q_sample(x0: torch.Tensor, t: torch.Tensor, schedule) -> Tuple[torch.Tensor
     eps = torch.randn_like(x0)
     x_t = sqrt_ab_t * x0 + sqrt_om_ab_t * eps
     return x_t, eps
+
+
+def _q_bridge_sample(
+    x0: torch.Tensor,
+    xT: torch.Tensor,
+    t: torch.Tensor,
+    schedule,
+    noise: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Bridge forward process:
+      x_t = a_t * xT + b_t * x0 + c_t * eps.
+    Returns (x_t, eps).
+    """
+    if not hasattr(schedule, "kind") or getattr(schedule, "kind") != "bridge":
+        raise RuntimeError("Bridge sampling requires a bridge schedule.")
+    if x0.shape != xT.shape:
+        raise ValueError(f"Bridge sampling expects x0/xT shapes to match (got {x0.shape} vs {xT.shape}).")
+
+    eps = noise if noise is not None else torch.randn_like(x0)
+    a_t = _extract_schedule_value(schedule.a, t, x0.shape)
+    b_t = _extract_schedule_value(schedule.b, t, x0.shape)
+    c_t = _extract_schedule_value(schedule.c, t, x0.shape)
+    x_t = a_t * xT + b_t * x0 + c_t * eps
+    return x_t, eps
+
+
+def _q_unidb_sample(
+    x0: torch.Tensor,
+    mu: torch.Tensor,
+    t: torch.Tensor,
+    schedule,
+    noise: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    UniDB forward process:
+      x_t = f_mean(x0, t; mu) + f_sigma(t) * noise_target.
+    noise_target is either:
+      - eps (default UniDB), or
+      - pi * eps (if residual modulation is enabled in schedule kwargs).
+    Returns (x_t, noise_target).
+    """
+    if getattr(schedule, "kind", None) != "unidb":
+        raise RuntimeError("UniDB sampling requires a UniDB schedule.")
+    if x0.shape != mu.shape:
+        raise ValueError(f"UniDB sampling expects x0/mu shapes to match (got {x0.shape} vs {mu.shape}).")
+    return schedule.sample_noisy_state(x0=x0, mu=mu, t=t, noise=noise)
 
 
 def _count_params(m: torch.nn.Module) -> Tuple[int, int]:
@@ -254,6 +318,13 @@ def _allreduce_sum_count(device, se_sum: float, elem_cnt: int):
     t = torch.tensor([se_sum, float(elem_cnt)], dtype=torch.float64, device=device)
     dist.all_reduce(t, op=dist.ReduceOp.SUM)
     return float(t[0].item()), int(t[1].item())
+
+
+def _allreduce_sum_tensor(t: torch.Tensor) -> torch.Tensor:
+    if not _is_dist():
+        return t
+    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+    return t
 
 
 def _all_gather_object(obj):

@@ -1,38 +1,51 @@
-# Large datasets and artefacts
-data/
-results/
-runs
-runs_debug
-runs*/
-logs/*
-!logs/.gitkeep
-!logs/slurm/
-logs/slurm/*
-!logs/slurm/.gitkeep
+# Python caches / build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Virtual environments / local runtimes
+env/
+.venv/
+venv/
+physics_ml/
 tmp/
 
-# Containers / environments
-physics_ml/
-*.sif
-*.sqfs
-*.img
-
-# Generated files
-*.out
-*.log
+# Data / model artifacts
+data/
+runs/
+runs_debug/
+runs*/
 *.ckpt
 *.pth
 *.pt
 *.h5
 *.hdf5
 *.npy
-slurm-*.out
 
-# Python cache / build
-__pycache__/
-*.pyc
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-build/
-dist/
+# Container artifacts
+*.sif
+*.sqfs
+*.img
+
+# Runtime logs
+*.out
+*.err
+*.log
+slurm-*.out
+logs/
+results/
+mlruns/
+
+# Local office/reference files
+*.pdf
+*.docx
+runs
+runs_debug
+docs/notes/
+*.backup_*

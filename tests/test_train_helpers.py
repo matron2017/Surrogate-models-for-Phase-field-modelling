@@ -1,19 +1,18 @@
 import torch
+import pytest
 
 from models.train.core.utils import _prepare_batch, _q_sample
 
 
-def test_prepare_batch_field():
+def test_prepare_batch_rejects_scalar_conditioning():
     batch = {
         "input": torch.randn(2, 3, 4, 4),
         "target": torch.randn(2, 3, 4, 4),
         "cond": torch.randn(2, 2),
     }
     cond_cfg = {"enabled": True, "source": "field", "cond_dim": 2}
-    x, y, cond = _prepare_batch(batch, torch.device("cpu"), cond_cfg, use_chlast=False)
-    assert x.shape == (2, 3, 4, 4)
-    assert y.shape == (2, 3, 4, 4)
-    assert cond.shape == (2, 2)
+    with pytest.raises(ValueError, match="Scalar conditioning has been removed"):
+        _prepare_batch(batch, torch.device("cpu"), cond_cfg, use_chlast=False)
 
 
 def test_q_sample_shapes():
