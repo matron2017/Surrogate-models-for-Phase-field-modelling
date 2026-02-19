@@ -50,3 +50,12 @@ runs_debug
 docs/notes/
 *.backup_*
 .venv_*/
+
+# Cluster-specific operational material (kept local, not in GitHub)
+docs/CSC_*.md
+docs/LUMI_*.md
+docs/PUHTI_*.md
+docs/SMOKETEST_*.md
+scripts/lumi_*
+slurm/lumi_*
+env/lumi/
