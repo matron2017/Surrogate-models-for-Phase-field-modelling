@@ -49,3 +49,4 @@ runs
 runs_debug
 docs/notes/
 *.backup_*
+.venv_*/

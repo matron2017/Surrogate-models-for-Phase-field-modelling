@@ -1,0 +1,8 @@
+# Extra packages layered on top of LUMI module stack (pytorch/2.5 + system site packages).
+# Keep this list minimal to reduce breakage risk.
+heavyball
+pytorch-wavelets
+torchcfm
+hydra-core
+omegaconf
+PyWavelets

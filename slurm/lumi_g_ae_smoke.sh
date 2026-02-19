@@ -21,7 +21,14 @@ if [[ "${LOAD_MODULES:-1}" == "1" ]]; then
 fi
 
 PROJECT_ROOT=${PROJECT_ROOT:-$SLURM_SUBMIT_DIR}
-PYTHON_BIN=${PYTHON_BIN:-python}
+LUMI_ENV_DIR=${LUMI_ENV_DIR:-${PROJECT_ROOT}/.venv_physics_ml_lumi}
+if [[ -d "${LUMI_ENV_DIR}" ]]; then
+  # shellcheck disable=SC1090
+  source "${LUMI_ENV_DIR}/bin/activate"
+  PYTHON_BIN=${PYTHON_BIN:-${LUMI_ENV_DIR}/bin/python}
+else
+  PYTHON_BIN=${PYTHON_BIN:-python}
+fi
 
 CFG_BASE=${CFG_BASE:-${PROJECT_ROOT}/configs/train/train_ae_latent_gpumedium_psgd_uncached_freq1_lola_big_64_1024_12g_latent32_nowavelet_b40.yaml}
 TRAIN_H5=${TRAIN_H5:-}
