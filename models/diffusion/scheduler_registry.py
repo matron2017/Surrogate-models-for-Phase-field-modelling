@@ -176,6 +176,7 @@ class BridgeSchedule:
     a: torch.Tensor
     b: torch.Tensor
     c: torch.Tensor
+    sigma: float = 1.0
     kind: str = "bridge"
 
     def __post_init__(self) -> None:
@@ -185,6 +186,7 @@ class BridgeSchedule:
             raise ValueError("BridgeSchedule coefficients must have the same length.")
         if torch.any(self.c < 0):
             raise ValueError("BridgeSchedule noise coefficient c must be >= 0.")
+        self.sigma = float(self.sigma)
         self.log_snr = torch.log((self.a**2 + self.b**2).clamp_min(1e-12)) - torch.log(
             (self.c**2).clamp_min(1e-12)
         )
@@ -203,6 +205,7 @@ class UniDBSchedule:
       - sample_noisy_state(x0, mu, t)
       - get_score_from_noise(noise, t)
       - reverse_sde_step_mean(x_t, score, t, mu)
+      - reverse_sde_step(x_t, score, t, mu)
       - reverse_optimum_step(x_t, x0, t, mu)
     """
 
@@ -210,6 +213,7 @@ class UniDBSchedule:
         self,
         timesteps: int = 100,
         lambda_square: float = 30.0,
+        lambda_rescale_255: bool = True,
         gamma_inv: float = 0.0,
         schedule: str = "cosine",
         eps: float = 0.005,
@@ -234,7 +238,12 @@ class UniDBSchedule:
         if self.timesteps < 2:
             raise ValueError("timesteps must be >= 2 for UniDB schedule.")
         self.T = self.timesteps
-        self.lambda_square = float(lambda_square) / 255.0 if float(lambda_square) >= 1.0 else float(lambda_square)
+        self.lambda_rescale_255 = bool(lambda_rescale_255)
+        lambda_square_raw = float(lambda_square)
+        if self.lambda_rescale_255 and lambda_square_raw >= 1.0:
+            self.lambda_square = lambda_square_raw / 255.0
+        else:
+            self.lambda_square = lambda_square_raw
         self.gamma_inv = float(gamma_inv)
         self.schedule_name = str(schedule).strip().lower()
         self.eps = float(eps)
@@ -480,6 +489,31 @@ class UniDBSchedule:
     def reverse_sde_step_mean(self, x_t: torch.Tensor, score: torch.Tensor, t: torch.Tensor, mu: torch.Tensor) -> torch.Tensor:
         return x_t - self._sde_reverse_drift(x_t, score, t, mu)
 
+    def reverse_sde_step(
+        self,
+        x_t: torch.Tensor,
+        score: torch.Tensor,
+        t: torch.Tensor,
+        mu: torch.Tensor,
+        *,
+        stochastic: bool = True,
+        noise_scale: float = 1.0,
+        noise: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        UniDB reverse update:
+          x_{t-1} = x_t - drift(x_t,t) - sigma_t * sqrt(dt) * N(0, I)
+
+        With stochastic=False, this is the deterministic mean-ODE step.
+        """
+        x_next = self.reverse_sde_step_mean(x_t, score, t, mu)
+        if not stochastic:
+            return x_next
+        sigma_t = self._take(self.sigmas, t, x_t)
+        eps = noise if noise is not None else torch.randn_like(x_t)
+        scale = max(float(noise_scale), 0.0) * math.sqrt(max(self.dt, 0.0))
+        return x_next - sigma_t * scale * eps
+
     def reverse_optimum_step(self, x_t: torch.Tensor, x0: torch.Tensor, t: torch.Tensor, mu: torch.Tensor) -> torch.Tensor:
         t_idx = self._ensure_t_index(t).to(device=x_t.device)
         if torch.any(t_idx <= 0):
@@ -579,12 +613,49 @@ def BrownianBridgeSchedule(timesteps: int = 1000, sigma: float = 1.0) -> BridgeS
     a = t
     b = 1.0 - t
     c = torch.sqrt((t * (1.0 - t)).clamp_min(0.0)) * float(sigma)
-    return BridgeSchedule(a=a, b=b, c=c)
+    return BridgeSchedule(a=a, b=b, c=c, sigma=float(sigma))
+
+
+def BridgeFractionalSchedule(
+    timesteps: int = 1000,
+    sigma: float = 1.0,
+    fractional_hurst: float = 0.3,
+    fractional_k: int = 8,
+    fractional_gamma_min: float = 0.1,
+    fractional_gamma_max: float = 20.0,
+    fractional_mix: float = 1.0,
+    fractional_use_abs_omega: bool = True,
+    fractional_eps: float = 1e-8,
+) -> BridgeSchedule:
+    """
+    Fractional Brownian bridge schedule in the bridge family (kind='bridge').
+
+    Keeps x_t = a_t * xT + b_t * x0 + c_t * eps, while warping the bridge
+    time-grid with MA-fBM-inspired memory terms.
+    """
+    t = torch.linspace(0.0, 1.0, timesteps, dtype=torch.float32)
+    t_eff = t
+    if int(fractional_k) > 0 and abs(float(fractional_hurst) - 0.5) > 1e-6 and float(fractional_mix) > 0.0:
+        t_eff, _omega, _gamma = _fractional_time_warp(
+            t,
+            hurst=float(fractional_hurst),
+            k=int(fractional_k),
+            gamma_min=float(fractional_gamma_min),
+            gamma_max=float(fractional_gamma_max),
+            mix=float(fractional_mix),
+            use_abs_omega=bool(fractional_use_abs_omega),
+            eps=float(fractional_eps),
+        )
+    a = t_eff
+    b = 1.0 - t_eff
+    c = torch.sqrt((t_eff * (1.0 - t_eff)).clamp_min(0.0)) * float(sigma)
+    return BridgeSchedule(a=a, b=b, c=c, sigma=float(sigma))
 
 
 def UniDBCosineSchedule(
     timesteps: int = 100,
     lambda_square: float = 30.0,
+    lambda_rescale_255: bool = True,
     gamma_inv: float = 0.0,
     eps: float = 0.005,
     input_mode: str = "delta_source_concat",
@@ -606,6 +677,7 @@ def UniDBCosineSchedule(
     return UniDBSchedule(
         timesteps=timesteps,
         lambda_square=lambda_square,
+        lambda_rescale_255=lambda_rescale_255,
         gamma_inv=gamma_inv,
         schedule="cosine",
         eps=eps,
@@ -630,6 +702,7 @@ def UniDBCosineSchedule(
 def UniDBFractionalSchedule(
     timesteps: int = 100,
     lambda_square: float = 30.0,
+    lambda_rescale_255: bool = True,
     gamma_inv: float = 0.0,
     eps: float = 0.005,
     input_mode: str = "delta_source_concat",
@@ -651,6 +724,7 @@ def UniDBFractionalSchedule(
     return UniDBSchedule(
         timesteps=timesteps,
         lambda_square=lambda_square,
+        lambda_rescale_255=lambda_rescale_255,
         gamma_inv=gamma_inv,
         schedule="cosine",
         eps=eps,
@@ -679,6 +753,7 @@ _SCHEDULE_REGISTRY: Dict[str, callable] = {
     "learned": LearnedNoiseSchedule,
     "exponential_ve": ExponentialVESchedule,
     "bridge_linear": BrownianBridgeSchedule,
+    "bridge_fractional": BridgeFractionalSchedule,
     "unidb_cosine": UniDBCosineSchedule,
     "unidb_fractional": UniDBFractionalSchedule,
 }

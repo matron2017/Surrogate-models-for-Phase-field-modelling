@@ -1,0 +1,215 @@
+train:
+  model_family: diffusion
+paths:
+  h5:
+    train: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/rightclean_512lb_touchcut_s8b5/simulation_train_rightclean_fixed34_gradshared_512lb_touchcut_s8b5_v4.h5
+    val: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/rightclean_512lb_touchcut_s8b5/simulation_val_rightclean_fixed34_gradshared_512lb_touchcut_s8b5_v4.h5
+  sim_map: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/sim_map.json
+dataloader:
+  file: /scratch/project_462001338/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  class: PFPairDataset
+  args:
+    data_key: images
+    input_channels:
+    - 0
+    - 1
+    target_channels:
+    - 0
+    - 1
+    identity_pairs: false
+    use_pairs_idx: true
+    add_thermal: true
+    thermal_axis: x
+    thermal_use_x0: true
+    thermal_on_target: false
+    thermal_require_precomputed: true
+    return_cond: false
+    normalize_images: true
+    normalize_force: false
+    normalize_source: file
+  train_args:
+    augment: false
+    limit_per_group: null
+    max_items: null
+  val_args:
+    augment: false
+    limit_per_group: null
+    max_items: null
+model:
+  backbone: unet_bottleneck_attn
+  params:
+    in_channels: 4
+    out_channels: 2
+    cond_dim: 1
+    channels:
+    - 64
+    - 96
+    - 128
+    - 192
+    num_blocks:
+    - 2
+    - 2
+    - 2
+    - 2
+    bottleneck_blocks:
+    - 2
+    - 2
+    attn_heads: 8
+    use_bottleneck_attn: false
+    afno_depth: 8
+    afno_mlp_ratio: 12.0
+    afno_num_blocks: 8
+    afno_inp_shape:
+    - 64
+    - 64
+    afno_patch_size:
+    - 1
+    - 1
+    afno_sparsity_threshold: 0.01
+    afno_hard_thresholding_fraction: 1.0
+    film_dim: 512
+    time_emb_dim: 128
+    dropout: 0.0
+    padding: mixed_y_reflect
+    use_time: true
+    skip_film: true
+    film_mode: affine
+    use_control_branch: true
+    hint_channels: 1
+    control_strength: 1.0
+    control_channels:
+    - 64
+    - 96
+    - 128
+    - 160
+    - 192
+loss:
+  base: mse
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.15
+  wavelet_curriculum:
+    enabled: true
+    stages:
+    - mix: 0.3
+      gain: 5000.0
+      mask_enabled: false
+  wavelet_mask:
+    enabled: false
+  wavelet_weight:
+    J: 3
+    wave: haar
+    mode: zero
+    strategy: multiband
+    level_weights:
+    - 2.0
+    - 1.4
+    - 0.7
+    lowpass_weight: 1.2
+    power: 1.8
+    beta_w: 120.0
+    normalize: true
+    norm_quantile: 0.95
+    combine_norm: true
+    rescale_max: false
+    clip_max: 16.0
+    thicken_mode: max
+    thicken_radius: 5
+    shared_map: true
+    shared_channels:
+    - 0
+    - 1
+    shared_reduce: max
+  diffusion_objective: fdbm_drift_mse
+  diffusion_matching_loss: l2
+adaptive:
+  region_selector: none
+  enable_adaptive_resolution: false
+conditioning:
+  enabled: false
+  use_theta: true
+  theta_channels: 1
+  theta_normalization: affine
+  theta_shift: 902.0
+  theta_scale: 20.0
+  theta_eps: 1.0e-06
+loader:
+  batch_size: 1
+  num_workers: 0
+  pin_memory: true
+trainer:
+  seed: 1
+  deterministic: false
+  device: cuda
+  epochs: 400
+  steps_per_epoch: 160
+  accumulation_steps: 1
+  use_val: true
+  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/big/bridge_fdbm_frac_unet_afno_controlxs_pixel512
+  grad_clip: 1.0
+  resume: false
+  amp:
+    enabled: true
+    dtype: bf16
+  channels_last: false
+  metrics:
+    mae: true
+    psnr: true
+    vrmse: true
+    spectral_rmse: false
+    endpoint_rmse: true
+    spectral_train: false
+  early_stop:
+    enabled: true
+    split: val
+    mode: min
+    metric: objective
+    patience: 25
+    min_delta: 0.0
+optim:
+  name: adamw
+  lr: 0.0001
+  weight_decay: 0.01
+  betas:
+  - 0.9
+  - 0.999
+sched:
+  name: cosine
+  T_max: 260
+  eta_min: 1.0e-06
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+mlflow:
+  enabled: false
+diffusion:
+  noise_schedule: bridge_fractional
+  timestep_sampler: uniform
+  schedule_kwargs:
+    timesteps: 20
+    sigma: 1.0
+    fractional_hurst: 0.3
+    fractional_k: 8
+    fractional_gamma_min: 0.1
+    fractional_gamma_max: 20.0
+    fractional_mix: 1.0
+    fractional_use_abs_omega: true
+    fractional_eps: 1.0e-08
+  sampler_kwargs:
+    t_min: 1
+    t_max: 19
+    include_terminal_unidb: false
+  dt: 1.0
+  n_steps: 1
+  thermal_bc: dirichlet
+  record_trajectory: false
+  val_num_samples: 6
+  val_deterministic: false
+  val_probabilistic_metrics: false
+  val_monitor_metric_stochastic: objective
+  val_endpoint_mode: single_step
+  val_rollout_nfe: 20
+  val_rollout_eta: 0.0
+  train_num_samples: 1
+  train_crps_weight: 0.0
+  train_spectral_crps_weight: 0.0
+  train_prob_start_epoch: 0
+  train_prob_ramp_epochs: 0
