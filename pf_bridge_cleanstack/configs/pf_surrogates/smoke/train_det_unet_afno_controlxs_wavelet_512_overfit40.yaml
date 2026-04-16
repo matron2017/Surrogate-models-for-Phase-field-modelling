@@ -1,10 +1,9 @@
-# legacy-name wrapper: filename retained for compatibility; content is UniDB config
 train:
-  model_family: diffusion
+  model_family: surrogate
 paths:
   h5:
     train: /scratch/project_462001338/pf_bridge_cleanstack/data/train.h5
-    val: /scratch/project_462001338/pf_bridge_cleanstack/data/val.h5
+    val: /scratch/project_462001338/pf_bridge_cleanstack/data/train.h5
   sim_map: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/sim_map.json
 dataloader:
   file: /scratch/project_462001338/pf_surrogate_modelling/models/train/core/pf_dataloader.py
@@ -31,23 +30,29 @@ dataloader:
   train_args:
     augment: false
     limit_per_group: null
-    max_items: null
+    max_items: 40
   val_args:
     augment: false
     limit_per_group: null
-    max_items: null
+    max_items: 40
+latent:
+  enabled: false
+  use_cached: false
+  trainable: false
 model:
-  backbone: unet_bottleneck_attn
+  backbone: unet_film_attn
   params:
-    in_channels: 4
+    in_channels: 2
     out_channels: 2
-    cond_dim: 1
+    cond_dim: 2
     channels:
-    - 64
-    - 96
     - 128
     - 192
+    - 256
+    - 384
+    - 512
     num_blocks:
+    - 2
     - 2
     - 2
     - 2
@@ -57,12 +62,12 @@ model:
     - 2
     attn_heads: 8
     use_bottleneck_attn: false
-    afno_depth: 8
+    afno_depth: 12
     afno_mlp_ratio: 12.0
-    afno_num_blocks: 8
+    afno_num_blocks: 16
     afno_inp_shape:
-    - 64
-    - 64
+    - 32
+    - 32
     afno_patch_size:
     - 1
     - 1
@@ -72,12 +77,12 @@ model:
     time_emb_dim: 128
     dropout: 0.0
     padding: mixed_y_reflect
-    use_time: true
+    use_time: false
     skip_film: true
     film_mode: affine
     use_control_branch: true
     hint_channels: 1
-    control_strength: 1.0
+    control_strength: 1.5
     control_channels:
     - 64
     - 96
@@ -87,7 +92,7 @@ model:
 loss:
   base: mse
   vmse_eps: 0.01
-  weight_wavelet_loss: 0.15
+  weight_wavelet_loss: 0.3
   wavelet_curriculum:
     enabled: true
     stages:
@@ -120,8 +125,6 @@ loss:
     - 0
     - 1
     shared_reduce: max
-  diffusion_objective: unidb_reverse_step
-  diffusion_matching_loss: l2
 adaptive:
   region_selector: none
   enable_adaptive_resolution: false
@@ -135,17 +138,17 @@ conditioning:
   theta_eps: 1.0e-06
 loader:
   batch_size: 1
-  num_workers: 0
+  num_workers: 4
   pin_memory: true
 trainer:
   seed: 1
   deterministic: false
   device: cuda
-  epochs: 400
-  steps_per_epoch: 160
-  accumulation_steps: 1
+  epochs: 260
+  steps_per_epoch: 80
+  accumulation_steps: 8
   use_val: true
-  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/big/bridge_unidb_unet_afno_controlxs_pixel512
+  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/smoke/overfit40_det_unet_afno_controlxs_wavelet_512
   grad_clip: 1.0
   resume: false
   amp:
@@ -157,15 +160,9 @@ trainer:
     psnr: true
     vrmse: true
     spectral_rmse: false
-    endpoint_rmse: true
     spectral_train: false
   early_stop:
-    enabled: true
-    split: val
-    mode: min
-    metric: objective
-    patience: 25
-    min_delta: 0.0
+    enabled: false
 optim:
   name: adamw
   lr: 0.0001
@@ -181,34 +178,3 @@ sched:
   warmup_start_lr: 0.0
 mlflow:
   enabled: false
-diffusion:
-  noise_schedule: unidb_cosine
-  timestep_sampler: uniform
-  schedule_kwargs:
-    timesteps: 25
-    lambda_square: 0.12
-    lambda_rescale_255: false
-    gamma_inv: 1.0e-06
-    eps: 0.005
-    input_mode: delta_source_concat
-    residual_mode: none
-  sampler_kwargs:
-    t_min: 1
-    t_max: 25
-    include_terminal_unidb: false
-  dt: 1.0
-  n_steps: 1
-  thermal_bc: dirichlet
-  record_trajectory: false
-  val_num_samples: 6
-  val_deterministic: false
-  val_probabilistic_metrics: false
-  val_monitor_metric_stochastic: objective
-  val_endpoint_mode: source_rollout_unidb_sde
-  val_rollout_nfe: 25
-  val_rollout_eta: 0.0
-  train_num_samples: 1
-  train_crps_weight: 0.0
-  train_spectral_crps_weight: 0.0
-  train_prob_start_epoch: 0
-  train_prob_ramp_epochs: 0

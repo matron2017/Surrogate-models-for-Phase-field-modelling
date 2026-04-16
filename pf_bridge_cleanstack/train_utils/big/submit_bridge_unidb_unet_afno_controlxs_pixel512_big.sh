@@ -3,9 +3,6 @@ set -euo pipefail
 STACK_ROOT=/scratch/project_462001338/pf_bridge_cleanstack
 PF_ROOT=/scratch/project_462001338/pf_surrogate_modelling
 CFG_BASE=${CFG_BASE:-/scratch/project_462001338/pf_bridge_cleanstack/configs/pf_surrogates/big/train_bridge_unidb_unet_afno_controlxs_pixel512_big.yaml}
-if [[ -z "${NO_LEGACY_WARN:-}" ]]; then
-  echo "[legacy-name] submit_bridge_frac_* now runs UniDB. Prefer submit_bridge_unidb_unet_afno_controlxs_pixel512_big.sh" >&2
-fi
 PARTITION=${PARTITION:-small-g}
 NODES=${NODES:-1}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}

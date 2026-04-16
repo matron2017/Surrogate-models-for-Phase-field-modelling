@@ -1,4 +1,3 @@
-# legacy-name wrapper: filename retained for compatibility; content is UniDB config
 train:
   model_family: diffusion
 paths:

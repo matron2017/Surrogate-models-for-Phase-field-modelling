@@ -1,9 +1,10 @@
+# legacy-name wrapper: filename retained for compatibility; content is UniDB config
 train:
   model_family: diffusion
 paths:
   h5:
-    train: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/rightclean_512lb_touchcut_s8b5/simulation_train_rightclean_fixed34_gradshared_512lb_touchcut_s8b5_v4.h5
-    val: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/rightclean_512lb_touchcut_s8b5/simulation_val_rightclean_fixed34_gradshared_512lb_touchcut_s8b5_v4.h5
+    train: /scratch/project_462001338/pf_bridge_cleanstack/data/train.h5
+    val: /scratch/project_462001338/pf_bridge_cleanstack/data/val.h5
   sim_map: /scratch/project_462001338/pf_surrogate_modelling/data/stochastic/sim_map.json
 dataloader:
   file: /scratch/project_462001338/pf_surrogate_modelling/models/train/core/pf_dataloader.py
@@ -119,7 +120,7 @@ loss:
     - 0
     - 1
     shared_reduce: max
-  diffusion_objective: epsilon_mse
+  diffusion_objective: unidb_reverse_step
   diffusion_matching_loss: l2
 adaptive:
   region_selector: none
@@ -144,7 +145,7 @@ trainer:
   steps_per_epoch: 160
   accumulation_steps: 1
   use_val: true
-  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/big/bridge_frac_unet_afno_controlxs_pixel512
+  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/big/bridge_unidb_unet_afno_controlxs_pixel512
   grad_clip: 1.0
   resume: false
   amp:
@@ -181,21 +182,19 @@ sched:
 mlflow:
   enabled: false
 diffusion:
-  noise_schedule: bridge_fractional
+  noise_schedule: unidb_cosine
   timestep_sampler: uniform
   schedule_kwargs:
-    timesteps: 20
-    sigma: 1.0
-    fractional_hurst: 0.3
-    fractional_k: 8
-    fractional_gamma_min: 0.1
-    fractional_gamma_max: 20.0
-    fractional_mix: 1.0
-    fractional_use_abs_omega: true
-    fractional_eps: 1.0e-08
+    timesteps: 25
+    lambda_square: 0.12
+    lambda_rescale_255: false
+    gamma_inv: 1.0e-06
+    eps: 0.005
+    input_mode: delta_source_concat
+    residual_mode: none
   sampler_kwargs:
     t_min: 1
-    t_max: 20
+    t_max: 25
     include_terminal_unidb: false
   dt: 1.0
   n_steps: 1
@@ -205,8 +204,8 @@ diffusion:
   val_deterministic: false
   val_probabilistic_metrics: false
   val_monitor_metric_stochastic: objective
-  val_endpoint_mode: single_step
-  val_rollout_nfe: 20
+  val_endpoint_mode: source_rollout_unidb_sde
+  val_rollout_nfe: 25
   val_rollout_eta: 0.0
   train_num_samples: 1
   train_crps_weight: 0.0

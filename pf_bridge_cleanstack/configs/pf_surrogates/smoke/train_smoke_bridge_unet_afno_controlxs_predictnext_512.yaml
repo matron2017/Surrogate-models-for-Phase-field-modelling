@@ -1,4 +1,3 @@
-# legacy-name wrapper: filename retained for compatibility; content is UniDB config
 train:
   model_family: diffusion
 paths:
@@ -30,12 +29,12 @@ dataloader:
     normalize_source: file
   train_args:
     augment: false
-    limit_per_group: null
-    max_items: null
+    limit_per_group: 2
+    max_items: 0.02
   val_args:
     augment: false
-    limit_per_group: null
-    max_items: null
+    limit_per_group: 2
+    max_items: 0.02
 model:
   backbone: unet_bottleneck_attn
   params:
@@ -82,7 +81,6 @@ model:
     - 64
     - 96
     - 128
-    - 160
     - 192
 loss:
   base: mse
@@ -141,11 +139,11 @@ trainer:
   seed: 1
   deterministic: false
   device: cuda
-  epochs: 400
-  steps_per_epoch: 160
+  epochs: 1
+  steps_per_epoch: 10
   accumulation_steps: 1
   use_val: true
-  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/big/bridge_unidb_unet_afno_controlxs_pixel512
+  out_dir: /scratch/project_462001338/pf_bridge_cleanstack/runs/smoke_bridge_unet_afno_controlxs_predictnext_512
   grad_clip: 1.0
   resume: false
   amp:
@@ -160,12 +158,7 @@ trainer:
     endpoint_rmse: true
     spectral_train: false
   early_stop:
-    enabled: true
-    split: val
-    mode: min
-    metric: objective
-    patience: 25
-    min_delta: 0.0
+    enabled: false
 optim:
   name: adamw
   lr: 0.0001
@@ -200,15 +193,10 @@ diffusion:
   n_steps: 1
   thermal_bc: dirichlet
   record_trajectory: false
-  val_num_samples: 6
-  val_deterministic: false
+  val_num_samples: 1
+  val_deterministic: true
   val_probabilistic_metrics: false
   val_monitor_metric_stochastic: objective
   val_endpoint_mode: source_rollout_unidb_sde
   val_rollout_nfe: 25
   val_rollout_eta: 0.0
-  train_num_samples: 1
-  train_crps_weight: 0.0
-  train_spectral_crps_weight: 0.0
-  train_prob_start_epoch: 0
-  train_prob_ramp_epochs: 0

@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,12 @@ UNIDB_ALLOWED = {
     "unidb_reverse_step",
     "unidb",
     "reverse_step_matching",
+}
+
+FDBM_BRIDGE_ALLOWED = {
+    "fdbm_drift_mse",
+    "fdbm_drift",
+    "bridge_fdbm_drift",
 }
 
 PREDICT_NEXT_OBJECTIVES = {
@@ -88,7 +95,14 @@ def _check(cfg: Dict[str, Any]) -> List[Item]:
     loss = dict(cfg.get("loss", {}) or {})
     diff_obj = str(loss.get("diffusion_objective", "epsilon_mse")).lower()
     flow_obj = str(_get(cfg, "train", "objective", default="")).lower() or "rectified_flow"
+    trainer = dict(cfg.get("trainer", {}) or {})
     trainer_metrics = dict(_get(cfg, "trainer", "metrics", default={}) or {})
+    use_val = bool(trainer.get("use_val", True))
+    sched_monitor_cfg = dict(trainer.get("scheduler_monitor", {}) or {})
+    es_cfg = dict(trainer.get("early_stop", {}) or {})
+    default_split = "val" if use_val else "train"
+    sched_split = str(sched_monitor_cfg.get("split", default_split) or default_split).strip().lower()
+    es_split = str(es_cfg.get("split", default_split) or default_split).strip().lower()
 
     model_params = dict(_get(cfg, "model", "params", default={}) or {})
     in_ch = int(model_params.get("in_channels", 0) or 0)
@@ -118,14 +132,25 @@ def _check(cfg: Dict[str, Any]) -> List[Item]:
         if sched_name.startswith("unidb"):
             if diff_obj in UNIDB_ALLOWED:
                 out.append(Item("objective_schedule", "PASS", f"schedule={sched_name}, diffusion_objective={diff_obj}"))
+            elif diff_obj in FDBM_BRIDGE_ALLOWED:
+                out.append(Item("objective_schedule", "FAIL", f"FDBM/fractional objective '{diff_obj}' cannot be used with UniDB schedule '{sched_name}'"))
             else:
                 out.append(Item("objective_schedule", "FAIL", f"UniDB schedule with incompatible objective '{diff_obj}'"))
-        else:
+        elif sched_name.startswith("bridge"):
             if diff_obj in UNIDB_ALLOWED:
                 out.append(Item(
                     "objective_schedule",
                     "FAIL",
-                    f"UniDB objective '{diff_obj}' with non-UniDB schedule '{sched_name}'",
+                    f"UniDB objective '{diff_obj}' with bridge schedule '{sched_name}'",
+                ))
+            else:
+                out.append(Item("objective_schedule", "PASS", f"schedule={sched_name}, diffusion_objective={diff_obj}"))
+        else:
+            if diff_obj in UNIDB_ALLOWED or diff_obj in FDBM_BRIDGE_ALLOWED:
+                out.append(Item(
+                    "objective_schedule",
+                    "FAIL",
+                    f"bridge-specific objective '{diff_obj}' requires unidb_* or bridge_* schedule (got '{sched_name}')",
                 ))
             else:
                 out.append(Item("objective_schedule", "PASS", f"schedule={sched_name}, diffusion_objective={diff_obj}"))
@@ -208,6 +233,32 @@ def _check(cfg: Dict[str, Any]) -> List[Item]:
     else:
         out.append(Item("residual_params", "WARN", "residual_mode=none"))
 
+    # 5b) endpoint mode vs schedule family (avoid UniDB/FDBM mixups)
+    endpoint_mode_raw = str(diff.get("val_endpoint_mode", "source_rollout_dbim")).strip().lower()
+    if endpoint_mode_raw in {"rollout_dbim", "source_rollout_dbim"}:
+        endpoint_mode = "source_rollout_dbim"
+    elif endpoint_mode_raw in {"source_rollout_unidb_sde", "rollout_unidb_sde", "unidb_sde", "unidb_exact", "unidb_reverse_sde"}:
+        endpoint_mode = "source_rollout_unidb_sde"
+    elif endpoint_mode_raw in {"teacher_forced", "legacy", "single_step"}:
+        endpoint_mode = "teacher_forced"
+    else:
+        endpoint_mode = "source_rollout_dbim"
+
+    if endpoint_mode == "source_rollout_unidb_sde" and not sched_name.startswith("unidb"):
+        out.append(Item(
+            "endpoint_mode_schedule",
+            "FAIL",
+            f"val_endpoint_mode={endpoint_mode} requires unidb_* schedule, got '{sched_name}'",
+        ))
+    elif endpoint_mode == "source_rollout_dbim" and sched_name.startswith("unidb"):
+        out.append(Item(
+            "endpoint_mode_schedule",
+            "FAIL",
+            f"val_endpoint_mode={endpoint_mode} is bridge/DBIM mode and cannot be used with UniDB schedule '{sched_name}'",
+        ))
+    else:
+        out.append(Item("endpoint_mode_schedule", "PASS", f"val_endpoint_mode={endpoint_mode}, schedule={sched_name}"))
+
     # 6) metrics visibility
     want_endpoint = bool(trainer_metrics.get("endpoint_rmse", False))
     want_spec = bool(trainer_metrics.get("spectral_rmse", False))
@@ -216,20 +267,123 @@ def _check(cfg: Dict[str, Any]) -> List[Item]:
     else:
         out.append(Item("metrics_endpoint", "WARN", f"endpoint_rmse={want_endpoint}, spectral_rmse={want_spec}"))
 
-    # 7) normalization check against H5 attrs (if available)
+    # 6a) monitor split must match validation availability
+    if (not use_val) and (sched_split == "val" or es_split == "val"):
+        out.append(
+            Item(
+                "monitor_split_vs_use_val",
+                "WARN",
+                f"trainer.use_val=false but monitor split targets val (scheduler={sched_split}, early_stop={es_split}); runtime will fall back to train metrics",
+            )
+        )
+    else:
+        out.append(
+            Item(
+                "monitor_split_vs_use_val",
+                "PASS",
+                f"trainer.use_val={use_val}, scheduler_split={sched_split}, early_stop_split={es_split}",
+            )
+        )
+
+    # 6b) diffusion stochastic/probabilistic validation settings
+    if model_family == "diffusion":
+        diff_val_num_samples = int(diff.get("val_num_samples", 1) or 1)
+        diff_val_deterministic = bool(diff.get("val_deterministic", False))
+        diff_val_prob_metrics = bool(diff.get("val_probabilistic_metrics", False))
+        diff_val_monitor = str(diff.get("val_monitor_metric_stochastic", "endpoint_crps")).lower()
+        if diff_val_prob_metrics and diff_val_deterministic:
+            out.append(
+                Item(
+                    "diffusion_prob_metrics",
+                    "WARN",
+                    "val_probabilistic_metrics=true but val_deterministic=true; probabilistic metrics are disabled",
+                )
+            )
+        elif diff_val_prob_metrics and diff_val_num_samples <= 1:
+            out.append(
+                Item(
+                    "diffusion_prob_metrics",
+                    "WARN",
+                    "val_probabilistic_metrics=true but val_num_samples<=1; ensemble metrics need >1 sample",
+                )
+            )
+        elif diff_val_prob_metrics:
+            out.append(
+                Item(
+                    "diffusion_prob_metrics",
+                    "PASS",
+                    f"enabled num_samples={diff_val_num_samples}, monitor_metric={diff_val_monitor}",
+                )
+            )
+        else:
+            out.append(
+                Item(
+                    "diffusion_prob_metrics",
+                    "WARN",
+                    "disabled (set diffusion.val_probabilistic_metrics=true for stochastic evaluation)",
+                )
+            )
+
+    # 7) validation dataset path check (when validation enabled)
     h5_train = _get(cfg, "paths", "h5", "train", default=None)
+    h5_val = _get(cfg, "paths", "h5", "val", default=None)
+    if use_val:
+        if not h5_val:
+            out.append(Item("val_dataset", "FAIL", "trainer.use_val=true but paths.h5.val is missing"))
+        elif not Path(str(h5_val)).exists():
+            out.append(Item("val_dataset", "FAIL", f"trainer.use_val=true but val H5 does not exist: {h5_val}"))
+        else:
+            out.append(Item("val_dataset", "PASS", f"val H5 present: {h5_val}"))
+    else:
+        out.append(Item("val_dataset", "WARN", "trainer.use_val=false; val metrics/checkpointing will not be computed"))
+
+    # 8) wavelet dependency presence (preflight environment)
+    weight_wavelet = float(loss.get("weight_wavelet_loss", 0.0) or 0.0)
+    wavelet_mask_enabled = bool(_get(loss, "wavelet_mask", "enabled", default=False))
+    ae_wavelet_enabled = bool(_get(loss, "ae_wavelet", "enabled", default=False))
+    wavelet_needed = (weight_wavelet > 0.0) or wavelet_mask_enabled or ae_wavelet_enabled
+    if wavelet_needed:
+        has_wavelets = importlib.util.find_spec("pytorch_wavelets") is not None
+        if has_wavelets:
+            out.append(Item("wavelet_dependency", "PASS", "pytorch_wavelets importable in preflight env"))
+        else:
+            out.append(
+                Item(
+                    "wavelet_dependency",
+                    "WARN",
+                    "wavelet losses/masks enabled but pytorch_wavelets is not importable in preflight env; verify runtime container/venv has it",
+                )
+            )
+    else:
+        out.append(Item("wavelet_dependency", "PASS", "wavelet losses/masks disabled"))
+
+    # 9) normalization check against H5 attrs (if available)
     if h5_train and h5py is not None and Path(str(h5_train)).exists():
         try:
+            data_key = str(dl_args.get("data_key", "")).strip()
+            key_label = data_key or "root"
             with h5py.File(str(h5_train), "r") as hf:
-                schema = str(hf.attrs.get("normalization_schema", "")).lower()
+                attrs = hf.attrs
+                if data_key:
+                    schema = str(
+                        attrs.get(
+                            f"{data_key}_normalization_schema",
+                            attrs.get(
+                                f"{data_key}_norm_type",
+                                attrs.get("normalization_schema", attrs.get("norm_type_images", "")),
+                            ),
+                        )
+                    ).lower()
+                else:
+                    schema = str(attrs.get("normalization_schema", attrs.get("norm_type_images", ""))).lower()
             if schema == "zscore" and (not normalize_images):
-                out.append(Item("normalization", "PASS", "latent zscore dataset with normalize_images=false (expected pre-normalized latent workflow)"))
+                out.append(Item("normalization", "PASS", f"schema({key_label})=zscore with normalize_images=false (expected pre-normalized workflow)"))
             elif schema == "zscore" and normalize_images and normalize_force:
-                out.append(Item("normalization", "WARN", "zscore schema + normalize_images/force may double-normalize"))
+                out.append(Item("normalization", "WARN", f"schema({key_label})=zscore + normalize_images/force may double-normalize"))
             elif schema == "":
-                out.append(Item("normalization", "WARN", "normalization_schema missing in H5"))
+                out.append(Item("normalization", "WARN", f"normalization schema missing for data_key={key_label}"))
             else:
-                out.append(Item("normalization", "PASS", f"normalization_schema={schema}, normalize_images={normalize_images}"))
+                out.append(Item("normalization", "PASS", f"schema({key_label})={schema}, normalize_images={normalize_images}"))
         except Exception as e:
             out.append(Item("normalization", "WARN", f"could not inspect H5 attrs: {e}"))
     else:
