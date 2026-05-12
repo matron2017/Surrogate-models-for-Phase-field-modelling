@@ -25,11 +25,17 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONUNBUFFERED=1
 
 CFG=${CFG:-${PROJECT_ROOT}/configs_current/autoencoder/finetune/dc_ae_f32c32_pde_512_bs128_16gpu.yaml}
-DATA_ROOT=${DATA_ROOT:-${PROJECT_ROOT}/data}
-RUNS_ROOT=${RUNS_ROOT:-${PROJECT_ROOT}/runs}
+export DATA_ROOT=${DATA_ROOT:-${PROJECT_ROOT}/data}
+export RUNS_ROOT=${RUNS_ROOT:-${PROJECT_ROOT}/runs}
 
 MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
 MASTER_PORT=${MASTER_PORT:-29503}
+
+# NCCL settings that work on Puhti InfiniBand fabric
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ib0}
+export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-ib0}
+export NCCL_SOCKET_FAMILY=${NCCL_SOCKET_FAMILY:-AF_INET}
+export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
 
 mkdir -p "${PROJECT_ROOT}/logs/slurm"
 
@@ -47,8 +53,6 @@ srun --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 \
     --rdzv_id="${SLURM_JOB_ID}" \
     --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
     "${PROJECT_ROOT}/scripts/train_dcae_finetune.py" \
-    --config "${CFG}" \
-    DATA_ROOT="${DATA_ROOT}" \
-    RUNS_ROOT="${RUNS_ROOT}"
+    --config "${CFG}"
 
 echo "DC-AE bs=128 training DONE"

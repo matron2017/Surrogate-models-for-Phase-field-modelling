@@ -414,7 +414,9 @@ def main() -> None:
     rank       = int(os.environ.get("RANK",       0))
     world_size = int(os.environ.get("WORLD_SIZE",  1))
 
-    dist.init_process_group("nccl")
+    # device_id required on Puhti to avoid NCCL ALLREDUCE hangs across nodes
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=torch.device(f"cuda:{local_rank}"))
 
     try:
         train(cfg, rank, local_rank, world_size)

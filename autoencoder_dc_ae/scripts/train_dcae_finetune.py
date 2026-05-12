@@ -253,10 +253,9 @@ def train(cfg: dict) -> None:
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     use_ddp = world_size > 1
     if use_ddp:
-        dist.init_process_group("nccl")
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group("nccl", device_id=torch.device(f"cuda:{local_rank}"))
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
-    if torch.cuda.is_available():
-        torch.cuda.set_device(device)
 
     _log(f"[train] rank={local_rank}/{world_size}  device={device}")
 
