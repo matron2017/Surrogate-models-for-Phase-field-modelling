@@ -37,10 +37,8 @@ if str(DC_GEN) not in sys.path:
 # ── Colormaps ─────────────────────────────────────────────────────────────────
 # Phase field: RdBu_r — matches eval_row_det_pixel.png exactly (blue=solid, red=liquid)
 CMAP_PHI   = "RdBu_r"
-# Concentration ×3: dark blue → teal → green → violet (sequential, values ≥ 0)
-CMAP_CONC  = mcolors.LinearSegmentedColormap.from_list(
-    "conc_bgtv",
-    ["#0D3B8E", "#1565C0", "#00838F", "#2E7D32", "#558B2F", "#6A1B9A", "#4A148C"])
+# Concentration ×3: viridis (perceptually uniform, good for ≥0 values)
+CMAP_CONC  = "viridis"
 # Thermal: plasma (works well for narrow Kelvin ranges)
 CMAP_THERM = "plasma"
 
@@ -253,7 +251,7 @@ def make_comparison_plot(samples: list[dict], norm_min, norm_scale,
     fig.legend(handles=legend_elements, loc="upper center", ncol=3,
                fontsize=9, framealpha=0.92, bbox_to_anchor=(0.5, 1.005))
 
-    fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
+    fig.savefig(out_path, dpi=250, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"\n[done] Saved → {out_path}")
 
