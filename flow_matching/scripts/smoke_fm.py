@@ -221,19 +221,24 @@ def run_smoke(
         print(f"  Peak GPU memory: {mem:.2f} GB")
 
     # ── Single training step (forward + backward) ─────────────────────────
-    print("\n[FM] Training step (forward + backward, batch_size=2) ...")
+    # Use batch_size=1 + AMP fp16, matching actual training settings
+    print("\n[FM] Training step (forward + backward, batch_size=1, AMP fp16) ...")
     model.train()
-    B = x_src.shape[0]
-    t_norm = torch.rand(B, device=device)
-    t_w    = t_norm.view(B, 1, 1, 1)
-    x_t    = (1.0 - t_w) * x_src + t_w * x_tgt
-    x1_pred = model(x_t, x_src, t_norm, theta)
-    loss = F.mse_loss(x1_pred, x_tgt)
-    loss.backward()
+    torch.cuda.reset_peak_memory_stats(device)
+    x_src1  = x_src[:1];  x_tgt1 = x_tgt[:1];  theta1 = theta[:1]
+    t_norm1 = torch.rand(1, device=device)
+    t_w1    = t_norm1.view(1, 1, 1, 1)
+    x_t1    = (1.0 - t_w1) * x_src1 + t_w1 * x_tgt1
+    from torch.amp import autocast, GradScaler
+    scaler = GradScaler("cuda")
+    with autocast("cuda", dtype=torch.float16):
+        x1_pred = model(x_t1, x_src1, t_norm1, theta1)
+        loss = F.mse_loss(x1_pred, x_tgt1)
+    scaler.scale(loss).backward()
     print(f"  Training loss={loss.item():.4f}  finite={torch.isfinite(loss).item()}")
     if device.type == "cuda":
         mem_bwd = torch.cuda.max_memory_allocated(device) / 1e9
-        print(f"  Peak GPU memory (after backward): {mem_bwd:.2f} GB")
+        print(f"  Peak GPU memory (after backward, fp16): {mem_bwd:.2f} GB")
 
     # ── Plot ──────────────────────────────────────────────────────────────
     plot_path = out_dir / f"smoke_fm_n{n_steps}.png"

@@ -3,7 +3,17 @@
 
 One figure per model, one row of panels (one sample, all channels laid out
 side-by-side).  Every panel is annotated with its min / mean / max value in
-physical units.
+physical units.  Concentration (c) uses a cyan/green/blue diverging colormap.
+Surrogate models include two GT-delta panels (GT out − GT in) so the expected
+temporal change is immediately visible.
+
+Layout — surrogate models (11 panels):
+  φ src | c src | φ GT | c GT | GT Δφ | GT Δc | φ pred | c pred | |err φ| | |err c| | θ K
+
+Layout — DC-AE (9 panels):
+  φ in | c in | θ in | φ rec | c rec | θ rec | |err φ| | |err c| | |err θ|
+
+Default data: test.h5
 
 Models produced:
   eval_row_det_pixel.png
@@ -13,7 +23,7 @@ Models produced:
   eval_row_dcae_lr5e6.png   (best-checkpoint, lr=5e-6)
 
 Usage (SLURM launcher also provided):
-  python eval/scripts/eval_summary_rows.py --out_dir eval/plots --n_steps 20
+  python eval/scripts/eval_summary_rows.py --out_dir eval/plots/test --n_steps 20
 """
 
 from __future__ import annotations
@@ -34,11 +44,18 @@ sys.path.insert(0, str(ROOT))
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import FancyBboxPatch
 
 CMAP_FIELD = "RdBu_r"
 CMAP_ERR   = "hot"
 CMAP_THERM = "plasma"
+# Blue → sky-blue → near-white → mint-green → dark green (for concentration field)
+CMAP_CONC = LinearSegmentedColormap.from_list(
+    "conc_bgc",
+    ["#1565C0", "#29B6F6", "#E3F2FD", "#C8E6C9", "#1B5E20"],
+    N=256,
+)
 
 
 # ─── Normalization stats ──────────────────────────────────────────────────────
@@ -284,9 +301,12 @@ def _err_lim(arr):
 
 def save_row_surrogate(x_src, x_tgt, x_pred, theta, norm: NormStats,
                        title: str, out_path: Path, tag: str = "det"):
-    """Single-row figure: [φ src | c src | φ GT | c GT | φ pred | c pred | φ err | c err | thermal K]
+    """Single-row figure:
+    [φ src | c src | φ GT | c GT | GT Δφ | GT Δc | φ pred | c pred | φ err | c err | thermal K]
 
+    GT Δφ and GT Δc show the signed change (target − source) = what the model must predict.
     Each panel annotated with min / mean / max in physical units.
+    Concentration channel (c) uses cyan/green/blue colormap.
     """
     # Convert to physical
     phi_src  = norm.phi_to_phys(_np(x_src[0, 0]))
@@ -297,31 +317,37 @@ def save_row_surrogate(x_src, x_tgt, x_pred, theta, norm: NormStats,
     c_pred   = norm.c_to_phys(_np(x_pred[0, 1]))
     phi_err  = phi_pred - phi_gt
     c_err    = c_pred   - c_gt
+    phi_delta = phi_gt  - phi_src   # GT temporal change
+    c_delta   = c_gt    - c_src
     therm    = norm.th_to_kelvin(_np(theta[0, 0]))
 
     # Colour limits
     phi_vlo, phi_vhi = -1.0, 1.0
     c_vlo,   c_vhi   = _sym_lim([c_src, c_gt, c_pred])
+    delta_phi_lo, delta_phi_hi = _sym_lim([phi_delta])
+    delta_c_lo,   delta_c_hi   = _sym_lim([c_delta])
     phi_elo, phi_ehi = _err_lim(phi_err)
     c_elo,   c_ehi   = _err_lim(c_err)
     th_vlo  = float(np.percentile(therm, 2))
     th_vhi  = float(np.percentile(therm, 98))
 
     panels = [
-        (phi_src,  "Source  φ",    CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
-        (c_src,    "Source  c×3",  CMAP_FIELD, c_vlo,   c_vhi,   "[×3 u]"),
-        (phi_gt,   "GT  φ",        CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
-        (c_gt,     "GT  c×3",      CMAP_FIELD, c_vlo,   c_vhi,   "[×3 u]"),
-        (phi_pred, f"Pred  φ  ({tag})", CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
-        (c_pred,   f"Pred  c×3  ({tag})", CMAP_FIELD, c_vlo,  c_vhi,  "[×3 u]"),
-        (np.abs(phi_err), "|Err|  φ", CMAP_ERR, phi_elo, phi_ehi, ""),
-        (np.abs(c_err),   "|Err|  c", CMAP_ERR, c_elo,   c_ehi,  ""),
-        (therm,    "Thermal",      CMAP_THERM, th_vlo,  th_vhi,  "K"),
+        (phi_src,        "Source  φ",          CMAP_FIELD, phi_vlo,       phi_vhi,       "[-1,1]"),
+        (c_src,          "Source  c×3",         CMAP_CONC,  c_vlo,         c_vhi,         "[×3 u]"),
+        (phi_gt,         "GT  φ  (t+1)",        CMAP_FIELD, phi_vlo,       phi_vhi,       "[-1,1]"),
+        (c_gt,           "GT  c×3  (t+1)",      CMAP_CONC,  c_vlo,         c_vhi,         "[×3 u]"),
+        (phi_delta,      "GT Δφ  (out−in)",     CMAP_FIELD, delta_phi_lo,  delta_phi_hi,  "[-1,1]"),
+        (c_delta,        "GT Δc×3  (out−in)",   CMAP_CONC,  delta_c_lo,    delta_c_hi,    "[×3 u]"),
+        (phi_pred,       f"Pred  φ  ({tag})",   CMAP_FIELD, phi_vlo,       phi_vhi,       "[-1,1]"),
+        (c_pred,         f"Pred  c×3  ({tag})", CMAP_CONC,  c_vlo,         c_vhi,         "[×3 u]"),
+        (np.abs(phi_err),"|Err|  φ",            CMAP_ERR,   phi_elo,       phi_ehi,       ""),
+        (np.abs(c_err),  "|Err|  c",            CMAP_ERR,   c_elo,         c_ehi,         ""),
+        (therm,          "Thermal  θ",          CMAP_THERM, th_vlo,        th_vhi,        "K"),
     ]
 
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.0),
-                             gridspec_kw={"wspace": 0.08})
+    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.5),
+                             gridspec_kw={"wspace": 0.22})
     fig.suptitle(title, fontsize=11, fontweight="bold", y=1.03)
 
     for ax, (img, ttl, cmap, vlo, vhi, lbl) in zip(axes, panels):
@@ -340,7 +366,9 @@ def save_row_bridge(x_src, x_tgt, x_pred, theta, norm: NormStats,
 
 def save_row_dcae(x_in, x_recon, norm_min, norm_scale, norm: NormStats,
                   title: str, out_path: Path, tag: str = "dcae"):
-    """Single-row for DC-AE: [φ in | c in | θ in | φ rec | c rec | θ rec | φ err | c err | θ err]"""
+    """Single-row for DC-AE: [φ in | c in | θ in | φ rec | c rec | θ rec | φ err | c err | θ err]
+    Concentration channel uses cyan/green/blue colormap.
+    """
 
     def _to_phys(arr_norm, ch):
         """DC-AE [-1,1] → physical display units."""
@@ -372,20 +400,20 @@ def save_row_dcae(x_in, x_recon, norm_min, norm_scale, norm: NormStats,
     th_elo,  th_ehi  = _err_lim(th_err)
 
     panels = [
-        (phi_in,           "Input  φ",      CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
-        (c_in,             "Input  c×3",    CMAP_FIELD, c_vlo,   c_vhi,   "[×3 u]"),
-        (th_in,            "Input  θ",      CMAP_THERM, th_vlo,  th_vhi,  "K"),
+        (phi_in,           "Input  φ",          CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
+        (c_in,             "Input  c×3",         CMAP_CONC,  c_vlo,   c_vhi,   "[×3 u]"),
+        (th_in,            "Input  θ",           CMAP_THERM, th_vlo,  th_vhi,  "K"),
         (phi_rec,          f"Recon  φ  ({tag})", CMAP_FIELD, phi_vlo, phi_vhi, "[-1,1]"),
-        (c_rec,            f"Recon  c×3  ({tag})", CMAP_FIELD, c_vlo,  c_vhi,  "[×3 u]"),
+        (c_rec,            f"Recon  c×3  ({tag})", CMAP_CONC, c_vlo,  c_vhi,  "[×3 u]"),
         (th_rec,           f"Recon  θ  ({tag})", CMAP_THERM, th_vlo, th_vhi,  "K"),
-        (np.abs(phi_err),  "|Err|  φ",      CMAP_ERR,   phi_elo, phi_ehi, ""),
-        (np.abs(c_err),    "|Err|  c",      CMAP_ERR,   c_elo,   c_ehi,  ""),
-        (np.abs(th_err),   "|Err|  θ",      CMAP_ERR,   th_elo,  th_ehi, "K"),
+        (np.abs(phi_err),  "|Err|  φ",           CMAP_ERR,   phi_elo, phi_ehi, ""),
+        (np.abs(c_err),    "|Err|  c",           CMAP_ERR,   c_elo,   c_ehi,  ""),
+        (np.abs(th_err),   "|Err|  θ",           CMAP_ERR,   th_elo,  th_ehi, "K"),
     ]
 
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.0),
-                             gridspec_kw={"wspace": 0.08})
+    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.5),
+                             gridspec_kw={"wspace": 0.22})
     fig.suptitle(title, fontsize=11, fontweight="bold", y=1.03)
 
     for ax, (img, ttl, cmap, vlo, vhi, lbl) in zip(axes, panels):
@@ -414,7 +442,7 @@ def main():
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[eval_rows] device={device}  n_steps={args.n_steps}")
 
-    val_h5 = Path(args.h5) if args.h5 else ROOT / "autoencoder_dc_ae/data/val.h5"
+    val_h5 = Path(args.h5) if args.h5 else ROOT / "autoencoder_dc_ae/data/test.h5"
     print(f"[eval_rows] data={val_h5}")
 
     DET_CKPT = (ROOT / "deterministic_pixel/runs"
