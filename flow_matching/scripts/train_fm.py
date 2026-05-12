@@ -31,6 +31,7 @@ import math
 import os
 import sys
 import time
+import contextlib
 from pathlib import Path
 
 import torch
@@ -260,7 +261,6 @@ def train(cfg: dict, rank: int, local_rank: int, world_size: int) -> None:
         output_device=local_rank,
         broadcast_buffers=False,
         find_unused_parameters=False,
-        static_graph=True,
     )
 
     if rank == 0:
@@ -328,7 +328,9 @@ def train(cfg: dict, rank: int, local_rank: int, world_size: int) -> None:
                 or batch_idx == len(train_loader) - 1
             )
 
-            with autocast("cuda", enabled=use_fp16):
+            # Use no_sync() on accumulation steps to avoid redundant all-reduce
+            sync_ctx = contextlib.nullcontext() if is_update_step else model.no_sync()
+            with sync_ctx, autocast("cuda", enabled=use_fp16):
                 x1_pred  = model(x_t, x_source, t_norm, theta)
                 loss_mse = F.mse_loss(x1_pred, x_target)
 

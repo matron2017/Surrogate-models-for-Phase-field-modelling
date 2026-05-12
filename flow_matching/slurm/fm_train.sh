@@ -34,20 +34,9 @@ CONFIG=${CONFIG:-${ROOT}/flow_matching/configs/fm_pde_512_big.yaml}
 NODES=${SLURM_NNODES:-3}
 GPUS_PER_NODE=4
 
-MASTER_HOST=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n1)
-MASTER_ADDR=$(getent ahostsv4 "${MASTER_HOST}" | awk 'NR==1{print $1}')
-if [[ -z "${MASTER_ADDR}" ]]; then
-  MASTER_ADDR=$("$PY" - "${MASTER_HOST}" <<'PY'
-import socket, sys
-host = sys.argv[1]
-try: print(socket.gethostbyname(host))
-except Exception: print("")
-PY
-)
-fi
-[[ -z "${MASTER_ADDR}" ]] && MASTER_ADDR="${MASTER_HOST}"
+MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n1)
 MASTER_PORT=${MASTER_PORT:-29546}
-export MASTER_ADDR MASTER_PORT
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 
 mkdir -p "${ROOT}/flow_matching/logs/slurm"
 
@@ -59,17 +48,16 @@ echo " config=${CONFIG}"
 echo "======================================================="
 nvidia-smi || true
 
-srun --ntasks="${NODES}" --ntasks-per-node=1 bash -lc '
-  set -euo pipefail
-  node_rank=${SLURM_PROCID}
-  '"$PY"' -m torch.distributed.run \
-    --nnodes='"$NODES"' \
-    --nproc_per_node='"$GPUS_PER_NODE"' \
-    --node_rank=${node_rank} \
-    --master_addr='"$MASTER_ADDR"' \
-    --master_port='"$MASTER_PORT"' \
-    '"$ROOT"'/flow_matching/scripts/train_fm.py \
-      --config '"$CONFIG"'
-'
+VENV_TORCHRUN="${VENV_DIR}/bin/torchrun"
+
+srun --ntasks="${NODES}" --ntasks-per-node=1 \
+  "${VENV_TORCHRUN}" \
+    --nnodes="${NODES}" \
+    --nproc_per_node="${GPUS_PER_NODE}" \
+    --rdzv_backend=c10d \
+    --rdzv_id="${SLURM_JOB_ID}" \
+    --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
+    "${ROOT}/flow_matching/scripts/train_fm.py" \
+      --config "${CONFIG}"
 
 echo "Flow Matching training DONE"
