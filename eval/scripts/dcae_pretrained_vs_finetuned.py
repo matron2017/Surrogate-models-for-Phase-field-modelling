@@ -92,13 +92,13 @@ def from_norm(t: torch.Tensor, norm_min, norm_scale) -> np.ndarray:
 def to_display(raw3: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Convert (3,H,W) raw h5 values to display-ready physical units.
 
-    φ  (ch 0): raw range ~[-1, 2.7] → clip to [-1, 1]
-    c  (ch 1): raw range ~[-1.6, 5.9] → clip to [0, +inf] then ×3
+    φ  (ch 0): tanh(φ_orig / √2) → maps to (-1, 1) with smooth interface
+    c  (ch 1): clip to [0, +inf] then ×3
     θ  (ch 2): raw Kelvin, pass through unchanged
     """
-    phi  = np.clip(raw3[0], -1.0, 1.0)
-    c    = np.clip(raw3[1],  0.0, None) * 3.0
-    th   = raw3[2].copy()
+    phi = np.tanh(raw3[0] / np.sqrt(2.0))
+    c   = np.clip(raw3[1], 0.0, None) * 3.0
+    th  = raw3[2].copy()
     return phi, c, th
 
 
@@ -178,8 +178,8 @@ def make_comparison_plot(samples: list[dict], norm_min, norm_scale,
     if n_rows == 1:
         axes = axes[None, :]
 
-    ch_labels = ["φ (phase field)",  "c×3 (concentration)", "θ (thermal, K)"]
-    ch_units  = ["[-1, 1]",          "[×3 units]",          "K"]
+    ch_labels = ["φ = tanh(φ_orig/√2)",  "c×3 (concentration)", "θ (thermal, K)"]
+    ch_units  = ["tanh [-1, 1]",          "[×3 units]",          "K"]
     ch_cmaps  = [CMAP_PHI, CMAP_CONC, CMAP_THERM]
     group_titles = ["Ground Truth",
                     "Pretrained  (no fine-tune)",
