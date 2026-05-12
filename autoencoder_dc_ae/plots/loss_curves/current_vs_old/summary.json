@@ -1,0 +1,22 @@
+{
+  "current_train_grad_last": 0.0884740721531115,
+  "current_train_grad_min": 0.08350880280766,
+  "current_train_l1_last": 0.0451276996112489,
+  "current_train_l1_min": 0.0451276996112489,
+  "current_train_spec_last": 3.947950225371819,
+  "current_train_spec_min": 3.9452326653839696,
+  "current_train_total_last": 0.405200746636112,
+  "current_train_total_min": 0.4037816258413451,
+  "current_val_l1_last": 0.0414021930098533,
+  "current_val_l1_min": 0.0379023650102317,
+  "old_train_grad_last": 0.089378984028159,
+  "old_train_grad_min": 0.0779188928109678,
+  "old_train_l1_last": 0.0460422390152688,
+  "old_train_l1_min": 0.0436476870839084,
+  "old_train_spec_last": 3.951995535330339,
+  "old_train_spec_min": 3.920859228480946,
+  "old_train_total_last": 0.406891368329525,
+  "old_train_total_min": 0.3989473745807425,
+  "old_val_l1_last": 0.0387617501989007,
+  "old_val_l1_min": 0.0356306437589228
+}

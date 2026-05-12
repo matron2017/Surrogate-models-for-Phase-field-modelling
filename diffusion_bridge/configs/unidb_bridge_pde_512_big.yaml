@@ -1,0 +1,44 @@
+# UniDB (Ornstein-Uhlenbeck bridge) — 300M+ backbone, 512×512 PDE fields
+# Faithful to UniDB++ paper: x0-parameterization, cosine schedule, gamma=0.5
+#
+# Noise calibration for z-scored PDE data:
+#   data std ≈ 0.54,  frame-to-frame MAE ≈ 0.06
+#   lambda_sq = 0.1  →  peak f_sigma ≈ 0.32  (≈ 5× frame dynamics)
+
+bridge_type: "unidb"
+
+sde:
+  lambda_sq: 0.1        # λ² noise scale (calibrated for z-scored PDE fields)
+  gamma:     0.5        # Bayes regulariser (sharpens bridge endpoint)
+  T:         100        # discrete timesteps (train samples all; infer uses N_steps subset)
+  schedule:  "cosine"   # theta schedule: cosine | linear | constant
+  eps:       0.01       # numerical floor for schedule construction
+
+model:
+  channels:          [192, 320, 512, 640, 832]
+  control_channels:  [96,  160, 256, 320, 416]
+  afno_depth:        12
+  afno_num_blocks:   16          # channels[-1]=832 must be divisible: 832/16=52 ✓
+  afno_mlp_ratio:    12.0
+  afno_inp_shape:    [32, 32]    # spatial size at AFNO bottleneck (512/16=32)
+  film_dim:          512
+  dropout:           0.0   # no dropout — DDP static_graph saves memory on V100-32GB
+
+data:
+  h5_path:     "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/train.h5"
+  val_h5_path: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/val.h5"
+  num_workers: 8
+
+training:
+  epochs:            300
+  batch_size_per_gpu: 1     # 12 GPUs × 1 × 6 accum = 72 global (same as det pixel)
+  grad_accum:        6
+  lr:                1.0e-4
+  weight_decay:      1.0e-5
+  warmup_frac:       0.05
+  lambda_wavelet:    0.1    # additional wavelet-weighted MSE term
+  val_every:         5
+  ckpt_every:        10
+  dtype:             "fp16" # V100 supports FP16 tensor cores
+
+run_dir: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/diffusion_bridge/runs/unidb_big_20260511T131120Z"

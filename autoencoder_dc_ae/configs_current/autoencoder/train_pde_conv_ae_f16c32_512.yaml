@@ -1,0 +1,51 @@
+# Custom convolutional PDE autoencoder — 16× spatial compression
+# Input:  3 × 512 × 512  (phi, c, theta)
+# Latent: 32 × 32 × 32   → 24× total volume compression
+# No pretrained weights — trains from scratch on solidification data
+
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  t_start: 0
+  t_step: 1
+  max_frames_train: null
+  max_frames_val: 400
+  augment: true            # random 90-deg rot + hflip
+
+model:
+  class: PDEConvAE
+  params:
+    in_channels: 3
+    latent_channels: 32
+    base_ch: 64
+    ch_mult: [1, 2, 4, 4]  # channels: [64, 128, 256, 256]
+    n_res_per_block: 2
+
+loss:
+  lambda_l1: 1.0
+  lambda_grad: 0.5         # Sobel gradient (interface sharpness)
+  lambda_spec: 0.0         # DISABLED — raw log-FFT L1 at 512px dominates ~99% of loss
+                           # at unrecoverable frequency content; confirmed in old project
+
+optim:
+  lr: 1.0e-04              # training from scratch (not fine-tuning pretrained)
+  weight_decay: 1.0e-04
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine
+  T_max: 200
+  eta_min: 1.0e-06
+  warmup_epochs: 5
+
+trainer:
+  epochs: 200
+  batch_size: 4            # per-GPU; 4 × 8 GPUs = 32 global
+  num_workers: 4
+  steps_per_epoch: null
+  amp:
+    enabled: false   # model is 16.3M — FP32 fits easily; AMP disabled to avoid FP16 edge cases
+  grad_clip: 1.0
+  checkpoint_interval_epochs: 10
+  resume: false
+  out_dir: ${RUNS_ROOT}/autoencoder/pde_conv_ae_f16c32_512

@@ -1,0 +1,6 @@
+1293640027 checkpoints/dc_ae_f32c32_pde_512_ft/checkpoint.best.pth
+1293640027 checkpoints/dc_ae_f32c32_pde_512_ft/checkpoint.last.pth
+1989378534 data/train.h5
+3542 data/sim_map.json
+479958722 data/test.h5
+502308045 data/val.h5

@@ -1,0 +1,3 @@
+[submodule "external_refs/UniDB-plusplus"]
+	path = external_refs/UniDB-plusplus
+	url = https://github.com/2769433owo/UniDB-plusplus.git

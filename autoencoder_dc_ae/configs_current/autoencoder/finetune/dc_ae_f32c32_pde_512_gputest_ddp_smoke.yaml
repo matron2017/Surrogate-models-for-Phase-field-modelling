@@ -1,0 +1,36 @@
+# Quick smoke config — 2 epochs x 5 steps to validate training loop
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  t_start: 0
+  t_step: 5
+  max_frames_train: 50
+  max_frames_val: 20
+  augment: false
+
+model:
+  pretrained_key: dc-ae-f32c32-in-1.0
+  freeze_encoder: false
+
+loss:
+  lambda_grad: 0.5
+  lambda_spec: 0.1
+
+optim:
+  lr: 5.0e-06
+  weight_decay: 1.0e-04
+
+sched:
+  T_max: 2
+
+trainer:
+  epochs: 2
+  batch_size: 1
+  num_workers: 0
+  steps_per_epoch: 5
+  amp:
+    enabled: true
+  grad_clip: 1.0
+  checkpoint_interval_epochs: 1
+  resume: false
+  out_dir: ${TMP_ROOT}/dcae_ft_smoke

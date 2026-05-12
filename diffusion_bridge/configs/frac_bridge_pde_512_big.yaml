@@ -1,0 +1,43 @@
+# Fractional bridge (fBm-inspired) — 300M+ backbone, 512×512 PDE fields
+# Hurst index H=0.7 gives smoother bridge paths than standard Brownian bridge (H=0.5),
+# appropriate for PDE fields that evolve continuously in time.
+#
+# Noise calibration for z-scored PDE data:
+#   data std ≈ 0.54,  frame-to-frame MAE ≈ 0.06
+#   sigma_max = 0.3  →  peak noise ≈ 0.3  (≈ 5× frame dynamics)
+
+bridge_type: "fractal"
+
+sde:
+  H:         0.7        # Hurst index (0.5 = standard Brownian bridge, >0.5 = smoother)
+  sigma_max: 0.3        # peak bridge noise std (calibrated for z-scored PDE fields)
+  T:         100        # discrete timesteps
+
+model:
+  channels:          [192, 320, 512, 640, 832]
+  control_channels:  [96,  160, 256, 320, 416]
+  afno_depth:        12
+  afno_num_blocks:   16          # 832/16=52 ✓
+  afno_mlp_ratio:    12.0
+  afno_inp_shape:    [32, 32]
+  film_dim:          512
+  dropout:           0.0   # no dropout — DDP static_graph saves memory on V100-32GB
+
+data:
+  h5_path:     "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/train.h5"
+  val_h5_path: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/val.h5"
+  num_workers: 8
+
+training:
+  epochs:            300
+  batch_size_per_gpu: 1     # 12 GPUs × 1 × 6 accum = 72 global
+  grad_accum:        6
+  lr:                1.0e-4
+  weight_decay:      1.0e-5
+  warmup_frac:       0.05
+  lambda_wavelet:    0.1
+  val_every:         5
+  ckpt_every:        10
+  dtype:             "fp16"
+
+run_dir: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/diffusion_bridge/runs/frac_big_20260511T131120Z"

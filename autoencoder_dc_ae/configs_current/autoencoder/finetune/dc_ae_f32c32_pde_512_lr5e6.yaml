@@ -1,0 +1,41 @@
+# DC-AE f32c32 fine-tune  —  LR variant A: conservative (lr=5e-6)
+# Base model: dc-ae-f32c32-in-1.0  |  latent: (B,32,16,16) for 512x512 input  |  32x spatial compression
+# lambda_spec=0.0: disabled — raw log-FFT L1 on 512px images (~3.9) dominated 99% of loss at any weight
+
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  t_start: 0
+  t_step: 1
+  max_frames_train: null
+  max_frames_val: 400
+  augment: true
+
+model:
+  pretrained_key: dc-ae-f32c32-in-1.0
+  freeze_encoder: false
+
+loss:
+  lambda_grad: 0.5
+  lambda_spec: 0.0    # DISABLED
+
+optim:
+  lr: 5.0e-06         # conservative fine-tune; ~12x below DC-Gen scratch default
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  T_max: 1000
+
+trainer:
+  epochs: 1000
+  batch_size: 4
+  num_workers: 4
+  steps_per_epoch: null
+  amp:
+    enabled: true
+  grad_clip: 1.0
+  checkpoint_interval_epochs: 10
+  resume: true
+  reset_lr_on_resume: true   # restart cosine from base lr; T_max = remaining epochs
+  out_dir: ${RUNS_ROOT}/autoencoder/finetune/dc_ae_f32c32_lr5e6

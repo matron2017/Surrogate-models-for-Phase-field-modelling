@@ -1,0 +1,204 @@
+adaptive:
+  enable_adaptive_resolution: false
+  region_selector: none
+conditioning:
+  cond_dim: 0
+  enabled: false
+  source: none
+  theta_channels: 1
+  theta_eps: 1.0e-06
+  theta_normalization: affine
+  theta_scale: 20.0
+  theta_shift: 902.0
+  use_theta: true
+dataloader:
+  args:
+    add_thermal: true
+    data_key: latent_images
+    identity_pairs: false
+    input_channels: all
+    normalize_force: false
+    normalize_images: false
+    normalize_source: file
+    return_cond: false
+    target_channels: all
+    thermal_axis: x
+    thermal_on_target: false
+    thermal_require_precomputed: true
+    thermal_use_x0: true
+    use_pairs_idx: true
+  class: PFPairDataset
+  file: /scratch/project_2008261/pf_surrogate_modelling/models/train/core/pf_dataloader.py
+  train_args:
+    augment: false
+    augment_flip: false
+    augment_roll: false
+    augment_rotate: false
+    augment_rotate_prob: 0.0
+    augment_swap: false
+    limit_per_group: 1
+    max_items: 1
+  val_args:
+    augment: false
+    limit_per_group: 1
+    max_items: 1
+diffusion:
+  dt: 1.0
+  n_steps: 1
+  noise_schedule: unidb_cosine
+  record_trajectory: false
+  sampler_kwargs:
+    include_terminal_unidb: false
+    t_max: 20
+    t_min: 1
+  schedule_kwargs:
+    eps: 0.005
+    gamma_inv: 1.0e-06
+    input_mode: delta_source_concat
+    lambda_square: 30.0
+    residual_clip: 10.0
+    residual_eps: 0.001
+    residual_mode: abs
+    residual_normalize: true
+    residual_pi_floor: 0.0
+    residual_power: 0.5
+    residual_scale: 0.25
+    timesteps: 20
+  thermal_bc: dirichlet
+  timestep_sampler: uniform
+  val_deterministic: false
+  val_monitor_metric_stochastic: endpoint_crps
+  val_num_samples: 1
+  val_probabilistic_metrics: false
+flow_matching:
+  sfm_adaptive_sigma: true
+  sfm_encoder_reg_lambda: 0.0
+  sfm_sigma_ema_beta: 0.02
+  sfm_sigma_max: 0.25
+  sfm_sigma_min: 0.001
+  sfm_sigma_z: 0.05
+  sigma: 0.0
+  val_deterministic: false
+  val_monitor_metric_stochastic: endpoint_crps
+  val_num_samples: 1
+  val_probabilistic_metrics: true
+  val_rollout_nfe: 20
+loader:
+  batch_size: 1
+  num_workers: 0
+  overfit_n: 2
+  pin_memory: true
+loss:
+  base: mse
+  diffusion_matching_loss: l2
+  diffusion_objective: unidb_predict_next
+  diffusion_weighting:
+    kind: none
+  physics_aux:
+    concentration_channels:
+    - 1
+    concentration_mean_weight: 0.0
+    enabled: false
+    mass_channels:
+    - 1
+    mass_rel_weight: 0.0
+    pixel_weight: 0.0
+    sub_batch_size: 1
+  vmse_eps: 0.01
+  weight_wavelet_loss: 0.0
+mlflow:
+  enabled: false
+model:
+  backbone: unet_bottleneck_attn
+  params:
+    afno_depth: 12
+    afno_hard_thresholding_fraction: 1.0
+    afno_inp_shape:
+    - 8
+    - 8
+    afno_mlp_ratio: 8.0
+    afno_num_blocks: 16
+    afno_patch_size: 1
+    afno_sparsity_threshold: 0.01
+    attn_heads: 8
+    bottleneck_blocks:
+    - 2
+    - 2
+    channels:
+    - 192
+    - 384
+    - 768
+    - 1024
+    cond_dim: 1
+    control_strength: 1.0
+    dropout: 0.0
+    film_dim: 512
+    film_mode: affine
+    hint_channels: 1
+    in_channels: 64
+    num_blocks:
+    - 2
+    - 2
+    - 2
+    - 2
+    out_channels: 32
+    padding: mixed
+    skip_film: true
+    time_emb_dim: 128
+    use_bottleneck_attn: false
+    use_control_branch: true
+    use_time: true
+optim:
+  betas:
+  - 0.9
+  - 0.999
+  lr: 0.0001
+  name: adam
+  weight_decay: 0.0
+paths:
+  h5:
+    train: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/train_latent_experimental_midtrain.h5
+    val: /scratch/project_2008261/pf_surrogate_modelling/data/latent_best_psgd_e279_dev/val_latent_experimental_midtrain.h5
+  sim_map: /scratch/project_2008261/pf_surrogate_modelling/data/stochastic/sim_map.json
+sched:
+  gamma: 0.5
+  milestones:
+  - 200
+  name: multistep
+  warmup_epochs: 0
+  warmup_start_lr: 0.0
+task:
+  name: surrogate
+train:
+  model_family: diffusion
+trainer:
+  accumulation_steps: 1
+  amp:
+    dtype: fp16
+    enabled: true
+  channels_last: false
+  deterministic: true
+  device: cuda
+  early_stop:
+    enabled: false
+    metric: endpoint_rmse
+    mode: min
+    split: val
+  epochs: 1
+  flow_monitor_force_endpoint: true
+  grad_clip: 1.0
+  log_interval: 0
+  metrics:
+    endpoint_rmse: true
+    mae: true
+    psnr: true
+    spectral_rmse: true
+    spectral_train: false
+    vrmse: true
+  out_dir: /scratch/project_2008261/pf_surrogate_modelling/runs/diffusion_bridge_unet_thermal_latentpsgd_e279_gpu24h_1n4g_b80_rdbmres_predictnext_nomass_afno8_gputest_overfit_det_nonfrac_q1
+  resume: false
+  seed: 1
+  steps_per_epoch: 1
+  use_val: true
+  use_wavelet_weights: false
+  val_steps_per_epoch: 1

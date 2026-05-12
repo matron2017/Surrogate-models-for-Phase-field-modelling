@@ -1,0 +1,60 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+env/
+.venv/
+venv/
+physics_ml/
+
+# ── Model weights & checkpoints ───────────────────────────────────────────────
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# ── Data files ────────────────────────────────────────────────────────────────
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# ── Training run artefacts (large; use DVC or separate storage) ───────────────
+runs/
+runs_debug/
+runs_*/
+checkpoints/
+tmp/
+
+# ── Datasets (symlinked or copied locally) ────────────────────────────────────
+data/
+
+# ── SLURM / HPC logs ──────────────────────────────────────────────────────────
+logs/
+*.out
+*.err
+slurm-*.out
+
+# ── Eval plots (generated artefacts; track selectively if needed) ─────────────
+eval/plots/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+*.swo
+*.bak
+*.backup_*
+*.tmp
+.ipynb_checkpoints/

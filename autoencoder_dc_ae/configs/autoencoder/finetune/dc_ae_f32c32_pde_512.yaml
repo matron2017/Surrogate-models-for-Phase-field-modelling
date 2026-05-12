@@ -1,0 +1,50 @@
+# DC-AE fine-tuning on 3-channel PDE solidification data (512x512)
+# Base model: dc-ae-f32c32-in-1.0  (f32 spatial, 32 latent channels)
+# Latent shape for 512x512 input: (B, 32, 16, 16)
+
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  # Include every time step in each simulation
+  t_start: 0
+  t_step: 1
+  max_frames_train: null   # use all training frames
+  max_frames_val: 400      # cap val for speed
+  augment: true            # random 90-deg rot + hflip
+
+model:
+  pretrained_key: dc-ae-f32c32-in-1.0
+  freeze_encoder: false    # fine-tune end-to-end
+
+loss:
+  lambda_grad: 0.5         # weight for Sobel gradient loss (interface sharpness)
+  lambda_spec: 0.1         # weight for spectral (FFT magnitude) loss
+
+# DC-Gen upstream defaults (dc_gen/apps/trainer/dc_trainer.py BaseTrainerConfig):
+#   optimizer: AdamW, lr: 6.4e-5, weight_decay: 0, betas: (0.9, 0.999)
+#   lr_scheduler: ConstantLRwithWarmup, warmup_steps: 50000, warmup_lr: 6.4e-6
+#   amp: fp32, save_checkpoint_steps: 1000, eval_steps: 20000
+# Adapted for fine-tuning on small PDE dataset (not training from scratch):
+#   - lower lr (5e-6 vs 6.4e-5) to avoid overwriting pretrained weights aggressively
+#   - weight_decay 1e-4 (upstream uses 0; small dataset benefits from mild regularisation)
+#   - cosine schedule (upstream uses ConstantLR+warmup; fine-tune has shorter horizon)
+#   - amp bf16 would be preferred but V100 doesn't support bf16, keeping fp16 via GradScaler
+optim:
+  lr: 6.4e-05              # DC-Gen upstream default lr
+  weight_decay: 0.0        # DC-Gen upstream default
+  betas: [0.9, 0.999]      # DC-Gen upstream default
+
+sched:
+  T_max: 100               # cosine decay over full training
+
+trainer:
+  epochs: 100
+  batch_size: 4            # per-GPU batch size (4 x 8 GPUs = 32 global)
+  num_workers: 4
+  steps_per_epoch: null    # null = use all batches
+  amp:
+    enabled: true
+  grad_clip: 1.0           # upstream uses null; keeping clip for stability
+  checkpoint_interval_epochs: 10
+  resume: false
+  out_dir: ${RUNS_ROOT}/autoencoder/finetune/dc_ae_f32c32_pde_512_ft
