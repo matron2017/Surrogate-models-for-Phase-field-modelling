@@ -1,0 +1,50 @@
+# DC-AE f32c32 fine-tune  —  bs=64 global (8 GPUs × bs=8 per GPU)
+# Use after current single-GPU runs (34405303/34405304) finish.
+# Launch with dcae_finetune_8gpu_bs8.sh (2 nodes × 4 GPUs = 8 ranks)
+#
+# Why 8 GPUs × bs=8:
+#   1 V100-32GB can handle bs≈4-6 at 512×512 with 323M DC-AE (AMP fp16)
+#   bs=8 per GPU is tight but feasible on V100-32GB with AMP + gradient checkpointing
+#   8 × 8 = 64 global batch (honest comparison with surrogate models at 72)
+#
+# If bs=8 OOMs on V100: reduce to bs=4, use 16 GPUs (4 nodes × 4) → 64 global
+#
+# Base model: dc-ae-f32c32-in-1.0  |  latent (B,32,16,16) for 512×512  |  32× compression
+
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  t_start: 0
+  t_step: 1
+  max_frames_train: null
+  max_frames_val: 400
+  augment: true
+
+model:
+  pretrained_key: dc-ae-f32c32-in-1.0
+  freeze_encoder: false
+
+loss:
+  lambda_grad: 0.5
+  lambda_spec: 0.0    # DISABLED
+
+optim:
+  lr: 2.0e-05         # same as lr2e5 variant (better convergence than lr5e6)
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  T_max: 1000
+
+trainer:
+  epochs: 1000
+  batch_size: 8       # per-GPU; 8 GPUs × bs=8 = 64 global batch
+  num_workers: 4
+  steps_per_epoch: null
+  amp:
+    enabled: true
+  grad_clip: 1.0
+  checkpoint_interval_epochs: 10
+  resume: false        # set true if resuming from a checkpoint
+  reset_lr_on_resume: true
+  out_dir: ${RUNS_ROOT}/autoencoder/finetune/dc_ae_f32c32_lr2e5_bs64

@@ -29,7 +29,8 @@ sched:
 
 trainer:
   epochs: 1000
-  batch_size: 4
+  batch_size: 4       # per-GPU; 1 V100 max ~4-6 at 512×512 with 323M model.
+                      # For global bs=64: use dc_ae_f32c32_pde_512_bs64_8gpu.yaml (8 GPUs × bs=8)
   num_workers: 4
   steps_per_epoch: null
   amp:
