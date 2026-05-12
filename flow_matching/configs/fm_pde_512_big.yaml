@@ -1,0 +1,39 @@
+# Rectified Flow / Flow Matching — 300M+ backbone, 512×512 PDE fields
+# Baseline comparison for UniDB and Fractional diffusion bridge models.
+#
+# SAME backbone as bridges: UNetFiLMAttn channels=[192,320,512,640,832]
+# SAME conditioning: x_source (concat input), theta (ControlNet-XS branch)
+# SAME data, SAME training budget (300 epochs, 12 GPUs, global batch 72)
+#
+# Difference from bridges:
+#   x_t = (1-t)*x_source + t*x_target  (no noise — linear interpolation)
+#   Inference: Euler ODE, n_steps=20
+
+model:
+  channels:          [192, 320, 512, 640, 832]
+  control_channels:  [96,  160, 256, 320, 416]
+  afno_depth:        12
+  afno_num_blocks:   16
+  afno_mlp_ratio:    12.0
+  afno_inp_shape:    [32, 32]
+  film_dim:          512
+  dropout:           0.0
+
+data:
+  h5_path:     "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/train.h5"
+  val_h5_path: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/autoencoder_dc_ae/data/val.h5"
+  num_workers: 8
+
+training:
+  epochs:             300
+  batch_size_per_gpu: 1       # 12 GPUs × 1 × 6 accum = 72 global (same as bridges)
+  grad_accum:         6
+  lr:                 1.0e-4
+  weight_decay:       1.0e-5
+  warmup_frac:        0.05
+  lambda_wavelet:     0.1     # same wavelet loss coefficient as bridges
+  val_every:          5
+  ckpt_every:         10
+  dtype:              "fp16"
+
+run_dir: "/scratch/project_2008261/pf_surrogate_modelling/Phase_field_surrogates/flow_matching/runs/fm_pde_512_big_20260512T053238Z"
