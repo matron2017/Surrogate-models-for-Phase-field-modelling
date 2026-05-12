@@ -2,7 +2,12 @@
 """
 DC-AE comparison: pretrained (no fine-tune) vs fine-tuned (best checkpoint).
 Shows 2 data points — first and last frame of test set.
-Each row: [GT φ | GT c | GT θ] | [Pretrained φ | c | θ] | [Fine-tuned φ | c | θ]
+Each row: [GT φ | GT c×3 | GT θ] | [Pretrained φ | c×3 | θ] | [Fine-tuned φ | c×3 | θ]
+
+Physical unit display:
+  φ  → clipped to [-1, 1]          (RdBu_r: blue=solid +1, red=liquid -1)
+  c  → clipped to [0, max] × 3     (dark-blue/teal/green/violet sequential)
+  θ  → raw Kelvin from h5          (plasma)
 """
 from __future__ import annotations
 import sys
@@ -16,7 +21,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from matplotlib.colorbar import Colorbar
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parents[2]
@@ -31,11 +35,14 @@ if str(DC_GEN) not in sys.path:
     sys.path.insert(0, str(DC_GEN))
 
 # ── Colormaps ─────────────────────────────────────────────────────────────────
+# Phase field: RdBu_r — matches eval_row_det_pixel.png exactly (blue=solid, red=liquid)
 CMAP_PHI   = "RdBu_r"
+# Concentration ×3: dark blue → teal → green → violet (sequential, values ≥ 0)
 CMAP_CONC  = mcolors.LinearSegmentedColormap.from_list(
-    "conc_bgc", ["#1565C0", "#29B6F6", "#E3F2FD", "#C8E6C9", "#1B5E20"])
-CMAP_THERM = "inferno"
-CMAP_ERR   = "bwr"
+    "conc_bgtv",
+    ["#0D3B8E", "#1565C0", "#00838F", "#2E7D32", "#558B2F", "#6A1B9A", "#4A148C"])
+# Thermal: plasma (works well for narrow Kelvin ranges)
+CMAP_THERM = "plasma"
 
 
 def _read_frame(h5_path: Path, sim: str, t: int) -> np.ndarray:
@@ -79,9 +86,22 @@ def to_norm(x_phys: np.ndarray, norm_min, norm_scale) -> torch.Tensor:
 
 
 def from_norm(t: torch.Tensor, norm_min, norm_scale) -> np.ndarray:
-    """(1,3,H,W) normalised → (3,H,W) physical numpy."""
+    """(1,3,H,W) normalised [-1,1] → (3,H,W) raw h5 values (phi, c_raw, theta_K)."""
     x = t.squeeze(0).cpu().float().numpy()
     return (x * 0.5 + 0.5) * norm_scale[:, None, None] + norm_min[:, None, None]
+
+
+def to_display(raw3: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert (3,H,W) raw h5 values to display-ready physical units.
+
+    φ  (ch 0): raw range ~[-1, 2.7] → clip to [-1, 1]
+    c  (ch 1): raw range ~[-1.6, 5.9] → clip to [0, +inf] then ×3
+    θ  (ch 2): raw Kelvin, pass through unchanged
+    """
+    phi  = np.clip(raw3[0], -1.0, 1.0)
+    c    = np.clip(raw3[1],  0.0, None) * 3.0
+    th   = raw3[2].copy()
+    return phi, c, th
 
 
 @torch.no_grad()
@@ -143,96 +163,95 @@ def _panel(ax, img: np.ndarray, title: str, cmap, vmin, vmax,
 def make_comparison_plot(samples: list[dict], norm_min, norm_scale,
                          model_pretrained, model_finetuned, device, out_path: Path):
     """
-    samples: list of dicts with keys 'label', 'phys' (3,H,W)
     Layout: 2 rows × 9 columns
-      cols 0-2: GT (φ, c, θ)
-      cols 3-5: Pretrained recon (φ, c, θ)
-      cols 6-8: Fine-tuned recon (φ, c, θ)
+      cols 0-2: GT  (φ [-1,1] | c×3 [≥0] | θ [K])
+      cols 3-5: Pretrained recon
+      cols 6-8: Fine-tuned recon
+    All channels in physical/display units:
+      φ   clipped to [-1, 1],  RdBu_r,  fixed vmin=-1 vmax=+1
+      c×3 clipped to [0, ...], CMAP_CONC, vmin=0, vmax=shared across models per row
+      θ   raw Kelvin,           plasma,    vmin/vmax=shared 2–98 percentile per row
     """
     n_rows = len(samples)
     n_cols = 9
     fig, axes = plt.subplots(n_rows, n_cols,
                               figsize=(4.2 * n_cols, 4.8 * n_rows),
-                              gridspec_kw={"wspace": 0.35, "hspace": 0.55})
+                              gridspec_kw={"wspace": 0.38, "hspace": 0.60})
     if n_rows == 1:
         axes = axes[None, :]
 
-    ch_labels  = ["φ (phase field)", "c (concentration)", "θ (thermal, K)"]
-    ch_units   = ["—", "mol fraction", "K"]
-    ch_cmaps   = [CMAP_PHI, CMAP_CONC, CMAP_THERM]
-
-    # column group headers
-    group_titles = ["Ground Truth", "Pretrained (no fine-tune)", "Fine-tuned (lr=2e-5, best ckpt)"]
-    group_colors = ["#2c3e50",      "#c0392b",                    "#1a5276"]
-
-    # Add group column headers as figure text
-    for gi, (gtitle, gcol) in enumerate(zip(group_titles, group_colors)):
-        col_center = (gi * 3 + 1) / (n_cols)  # normalised x center of group
-        # Will add per-row via ax titles instead
-        pass
+    ch_labels = ["φ (phase field)",  "c×3 (concentration)", "θ (thermal, K)"]
+    ch_units  = ["[-1, 1]",          "[×3 units]",          "K"]
+    ch_cmaps  = [CMAP_PHI, CMAP_CONC, CMAP_THERM]
+    group_titles = ["Ground Truth",
+                    "Pretrained  (no fine-tune)",
+                    "Fine-tuned  (lr=2e-5, best ckpt)"]
+    group_colors = ["#2c3e50", "#922b21", "#154360"]
 
     for row_idx, sample in enumerate(samples):
-        phys_gt = sample["phys"]          # (3, H, W)
-        x_norm  = to_norm(phys_gt, norm_min, norm_scale).to(device)
+        raw_gt  = sample["phys"]   # (3, H, W) — raw h5 values
+        x_norm  = to_norm(raw_gt, norm_min, norm_scale).to(device)
 
         with torch.no_grad():
-            z_pre  = model_pretrained.encode(x_norm)
-            y_pre  = model_pretrained.decode(z_pre).cpu()
-            z_ft   = model_finetuned.encode(x_norm)
-            y_ft   = model_finetuned.decode(z_ft).cpu()
+            y_pre = model_pretrained.decode(model_pretrained.encode(x_norm)).cpu()
+            y_ft  = model_finetuned.decode( model_finetuned.encode( x_norm)).cpu()
 
-        phys_pre = from_norm(y_pre, norm_min, norm_scale)
-        phys_ft  = from_norm(y_ft,  norm_min, norm_scale)
+        raw_pre = from_norm(y_pre, norm_min, norm_scale)
+        raw_ft  = from_norm(y_ft,  norm_min, norm_scale)
 
-        groups = [
-            ("GT",           phys_gt,  group_colors[0]),
-            ("Pretrained",   phys_pre, group_colors[1]),
-            ("Fine-tuned",   phys_ft,  group_colors[2]),
-        ]
+        # Convert each to display-ready physical units
+        disp = []
+        for raw in [raw_gt, raw_pre, raw_ft]:
+            phi, c3, th = to_display(raw)
+            disp.append((phi, c3, th))
 
-        # Determine shared vmin/vmax per channel across all three (GT + both models)
-        vmins, vmaxs = [], []
-        for ch in range(3):
-            all_ch = np.stack([phys_gt[ch], phys_pre[ch], phys_ft[ch]])
-            vmins.append(float(all_ch.min()))
-            vmaxs.append(float(all_ch.max()))
+        # Shared colour limits per channel (across GT + both models)
+        # φ: always fixed [-1, 1]
+        phi_vmin, phi_vmax = -1.0, 1.0
+        # c×3: [0, max across all three]
+        c_vmax = max(float(d[1].max()) for d in disp)
+        c_vmin = 0.0
+        # θ: 2–98th percentile across all three
+        all_th = np.concatenate([d[2].ravel() for d in disp])
+        th_vmin = float(np.percentile(all_th, 2))
+        th_vmax = float(np.percentile(all_th, 98))
 
-        for gi, (glabel, phys, gcol) in enumerate(groups):
+        vmins = [phi_vmin, c_vmin, th_vmin]
+        vmaxs = [phi_vmax, c_vmax, th_vmax]
+
+        for gi, ((phi, c3, th), gcol, gtitle) in enumerate(zip(disp, group_colors, group_titles)):
+            imgs = [phi, c3, th]
             for ch in range(3):
                 col = gi * 3 + ch
                 ax  = axes[row_idx, col]
-                img = phys[ch]
-                cmap = ch_cmaps[ch]
-                title = f"{glabel}\n{ch_labels[ch]}"
-                _panel(ax, img, title, cmap, vmins[ch], vmaxs[ch],
+                _panel(ax, imgs[ch],
+                       f"{gtitle}\n{ch_labels[ch]}",
+                       ch_cmaps[ch], vmins[ch], vmaxs[ch],
                        cbar_label=ch_units[ch], stats=True)
-
-                # Highlight group with colored spine
                 for spine in ax.spines.values():
                     spine.set_visible(True)
                     spine.set_edgecolor(gcol)
-                    spine.set_linewidth(2.0)
+                    spine.set_linewidth(2.2)
 
-        # Row label
-        fig.text(0.005, 1.0 - (row_idx + 0.5) / n_rows,
-                 sample["label"], va="center", ha="left",
-                 fontsize=10, fontweight="bold", rotation=90,
-                 color="#333333")
+        # Row annotation
+        axes[row_idx, 0].set_ylabel(sample["label"], fontsize=9,
+                                    fontweight="bold", labelpad=6)
+        axes[row_idx, 0].yaxis.set_visible(True)
 
-    # Overall title + group legend
     fig.suptitle(
-        "DC-AE Reconstruction: Pretrained vs Fine-tuned  |  Test set (first & last frame)",
-        fontsize=13, fontweight="bold", y=1.01
+        "DC-AE Reconstruction — Pretrained vs Fine-tuned  |  Test set: first & last frame",
+        fontsize=13, fontweight="bold", y=1.02,
     )
-    # Legend patches
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor=group_colors[0], label="Ground Truth"),
-        Patch(facecolor=group_colors[1], label="Pretrained  (mit-han-lab/dc-ae-f32c32-in-1.0, no PDE adaptation)"),
-        Patch(facecolor=group_colors[2], label="Fine-tuned  (lr=2e-5 cosine, best val checkpoint)"),
+        Patch(facecolor=group_colors[1],
+              label="Pretrained  (mit-han-lab/dc-ae-f32c32-in-1.0, ImageNet only)"),
+        Patch(facecolor=group_colors[2],
+              label="Fine-tuned  (lr=2e-5 cosine 1000 ep, best val_l1 checkpoint)"),
     ]
     fig.legend(handles=legend_elements, loc="upper center", ncol=3,
-               fontsize=9, framealpha=0.9, bbox_to_anchor=(0.5, 1.0))
+               fontsize=9, framealpha=0.92, bbox_to_anchor=(0.5, 1.005))
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
