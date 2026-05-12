@@ -346,8 +346,8 @@ def save_row_surrogate(x_src, x_tgt, x_pred, theta, norm: NormStats,
     ]
 
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.5),
-                             gridspec_kw={"wspace": 0.22})
+    fig, axes = plt.subplots(1, n, figsize=(4.0 * n, 4.5),
+                             gridspec_kw={"wspace": 0.31})
     fig.suptitle(title, fontsize=11, fontweight="bold", y=1.03)
 
     for ax, (img, ttl, cmap, vlo, vhi, lbl) in zip(axes, panels):
@@ -412,8 +412,8 @@ def save_row_dcae(x_in, x_recon, norm_min, norm_scale, norm: NormStats,
     ]
 
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.5),
-                             gridspec_kw={"wspace": 0.22})
+    fig, axes = plt.subplots(1, n, figsize=(4.0 * n, 4.5),
+                             gridspec_kw={"wspace": 0.31})
     fig.suptitle(title, fontsize=11, fontweight="bold", y=1.03)
 
     for ax, (img, ttl, cmap, vlo, vhi, lbl) in zip(axes, panels):
@@ -496,6 +496,7 @@ def main():
                     T=sde_cfg["T"],
                     schedule=sde_cfg.get("schedule", "cosine"),
                     eps=sde_cfg.get("eps", 0.01),
+                    device=device,
                 )
             else:
                 from diffusion_bridge.sde.frac_bridge_sde import FracBridgeSDE
@@ -503,6 +504,7 @@ def main():
                     H=sde_cfg["H"],
                     sigma_max=sde_cfg["sigma_max"],
                     T=sde_cfg["T"],
+                    device=device,
                 )
 
             model = build_bridge(str(ckpt), device)

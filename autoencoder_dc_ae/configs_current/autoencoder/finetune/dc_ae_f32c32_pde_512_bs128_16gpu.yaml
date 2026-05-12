@@ -1,0 +1,43 @@
+# DC-AE f32c32 fine-tune  —  global batch = 128
+# 16 GPUs (4 nodes × 4 V100) × bs=4/GPU × grad_accum=2  =  128 effective global batch
+# Safe: bs=4 is confirmed to work on single V100-32GB with this model.
+# Resumes from lr2e5 variant (better convergence) with fresh cosine LR schedule.
+
+data:
+  train_h5: ${DATA_ROOT}/train.h5
+  val_h5:   ${DATA_ROOT}/val.h5
+  t_start: 0
+  t_step: 1
+  max_frames_train: null
+  max_frames_val: 400
+  augment: true
+
+model:
+  pretrained_key: dc-ae-f32c32-in-1.0
+  freeze_encoder: false
+
+loss:
+  lambda_grad: 0.5
+  lambda_spec: 0.0
+
+optim:
+  lr: 2.0e-05
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+sched:
+  T_max: 1000
+
+trainer:
+  epochs: 1000
+  batch_size: 4               # per-GPU; 4 nodes × 4 GPUs × bs=4 × accum=2 = 128 eff. global
+  grad_accum_steps: 2         # gradient accumulation multiplier
+  num_workers: 4
+  steps_per_epoch: null
+  amp:
+    enabled: true
+  grad_clip: 1.0
+  checkpoint_interval_epochs: 10
+  resume: true
+  reset_lr_on_resume: true    # restart cosine from base lr; T_max = remaining epochs
+  out_dir: ${RUNS_ROOT}/autoencoder/finetune/dc_ae_f32c32_bs128

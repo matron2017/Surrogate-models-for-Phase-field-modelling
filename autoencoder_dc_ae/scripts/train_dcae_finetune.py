@@ -21,6 +21,7 @@ Usage (torchrun, N GPUs):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -297,6 +298,7 @@ def train(cfg: dict) -> None:
 
     bs = int(tc.get("batch_size", 4))
     nw = int(tc.get("num_workers", 4))
+    grad_accum = int(tc.get("grad_accum_steps", 1))  # gradient accumulation
 
     train_sampler = DistributedSampler(train_ds, shuffle=True) if use_ddp else None
     train_loader = DataLoader(
@@ -306,7 +308,8 @@ def train(cfg: dict) -> None:
     val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=True)
 
     total_train = len(train_ds)
-    _log(f"[data] train={total_train} val={len(val_ds)} frames  batch={bs}")
+    eff_batch = bs * (torch.distributed.get_world_size() if use_ddp else 1) * grad_accum
+    _log(f"[data] train={total_train} val={len(val_ds)} frames  batch={bs}  grad_accum={grad_accum}  eff_global_batch={eff_batch}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     from dc_gen.ae_model_zoo import DCAE_HF
@@ -393,18 +396,29 @@ def train(cfg: dict) -> None:
                 break
             x = x.to(device, non_blocking=True)
 
-            with torch.cuda.amp.autocast(enabled=amp_enabled):
-                z = model.encode(x) if not hasattr(model, "module") else model.module.encode(x)
-                y = model.decode(z) if not hasattr(model, "module") else model.module.decode(z)
-                losses = pde_reconstruction_loss(y, x, lambda_grad=lambda_grad, lambda_spec=lambda_spec)
+            # gradient accumulation: accumulate over grad_accum micro-steps
+            accum_step = batch_idx % grad_accum
+            is_sync_step = (accum_step == grad_accum - 1) or (batch_idx == len(train_loader) - 1)
 
-            optim.zero_grad(set_to_none=True)
-            scaler.scale(losses["total"]).backward()
-            if grad_clip > 0:
-                scaler.unscale_(optim)
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            scaler.step(optim)
-            scaler.update()
+            if accum_step == 0:
+                optim.zero_grad(set_to_none=True)
+
+            ctx = model.no_sync() if (use_ddp and not is_sync_step) else contextlib.nullcontext()
+            with ctx:
+                with torch.cuda.amp.autocast(enabled=amp_enabled):
+                    z = model.encode(x) if not hasattr(model, "module") else model.module.encode(x)
+                    y = model.decode(z) if not hasattr(model, "module") else model.module.decode(z)
+                    losses = pde_reconstruction_loss(y, x, lambda_grad=lambda_grad, lambda_spec=lambda_spec)
+                    loss_scaled = losses["total"] / grad_accum
+
+                scaler.scale(loss_scaled).backward()
+
+            if is_sync_step:
+                if grad_clip > 0:
+                    scaler.unscale_(optim)
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(optim)
+                scaler.update()
 
             for k in accum:
                 accum[k] += losses[k].item()
