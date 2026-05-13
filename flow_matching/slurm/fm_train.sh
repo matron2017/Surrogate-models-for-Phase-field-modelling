@@ -29,6 +29,9 @@ export NCCL_SOCKET_FAMILY=${NCCL_SOCKET_FAMILY:-AF_INET}
 export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 export PYTHONUNBUFFERED=1
+# Extend watchdog timeout — first epoch can be slow (HDF5 cache cold, large model init)
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-7200}
+export NCCL_TIMEOUT=${NCCL_TIMEOUT:-7200}
 
 CONFIG=${CONFIG:-${ROOT}/flow_matching/configs/fm_pde_512_big.yaml}
 NODES=${SLURM_NNODES:-3}
