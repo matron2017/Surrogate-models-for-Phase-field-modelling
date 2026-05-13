@@ -269,7 +269,7 @@ def train(cfg: dict) -> None:
 
     out_dir = Path(tc["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_interval = int(tc.get("checkpoint_interval_epochs", 5))
+    # Only checkpoint.last.pth and checkpoint.best.pth are saved (no periodic epoch files)
     epochs = int(tc.get("epochs", 50))
     steps_per_epoch = tc.get("steps_per_epoch", None)
     amp_enabled = tc.get("amp", {}).get("enabled", True)
@@ -482,9 +482,7 @@ def train(cfg: dict) -> None:
                 _save_checkpoint(raw_model, optim, epoch, global_step, m, out_dir, "best")
                 _log(f"  [best] val_l1={val_l1:.4f}")
 
-            # Save periodic checkpoint
-            if (epoch + 1) % ckpt_interval == 0:
-                _save_checkpoint(raw_model, optim, epoch, global_step, m, out_dir, f"epoch{epoch:04d}")
+            # Periodic epoch checkpoints intentionally disabled — only last + best are kept
 
     _log("[train] DONE")
     if _is_main():
