@@ -50,26 +50,20 @@ mkdir -p "$DET/tmp" "$DET/logs/slurm"
 cp "$CFG_SNAPSHOT" "$TMP_CFG"
 
 MASTER_HOST=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
-MASTER_ADDR=$(getent ahostsv4 "${MASTER_HOST}" | awk 'NR==1{print $1}')
-[[ -z "${MASTER_ADDR}" ]] && MASTER_ADDR="${MASTER_HOST}"
 MASTER_PORT=${MASTER_PORT:-29544}
-export MASTER_ADDR MASTER_PORT
 
 echo "[det-pixel-resume] cfg=$TMP_CFG"
 echo "[det-pixel-resume] out_dir=$OUT_DIR"
 echo "[det-pixel-resume] ckpt=$CKPT"
-echo "[det-pixel-resume] world_size=$WORLD_SIZE master=${MASTER_ADDR}:${MASTER_PORT}"
+echo "[det-pixel-resume] nodes=$NODES master=${MASTER_HOST}:${MASTER_PORT}"
 nvidia-smi || true
 
 cd "$ROOT"
-srun --ntasks="$NODES" --ntasks-per-node=1 bash -lc '
-  set -euo pipefail
-  node_rank=${SLURM_PROCID}
-  '"$PY"' -m torch.distributed.run \
-    --nnodes='"$NODES"' \
-    --nproc_per_node='"$GPUS_PER_NODE"' \
-    --node_rank=${node_rank} \
-    --master_addr='"$MASTER_ADDR"' \
-    --master_port='"$MASTER_PORT"' \
-    -m models.train.core.train -c '"$TMP_CFG"' --resume '"$CKPT"'
-'
+srun --ntasks="$NODES" --ntasks-per-node=1 \
+  "$PY" -m torch.distributed.run \
+    --nnodes="${NODES}" \
+    --nproc_per_node="${GPUS_PER_NODE}" \
+    --rdzv_backend=c10d \
+    --rdzv_id="${SLURM_JOB_ID}" \
+    --rdzv_endpoint="${MASTER_HOST}:${MASTER_PORT}" \
+    -m models.train.core.train -c "${TMP_CFG}" --resume "${CKPT}"

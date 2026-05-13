@@ -37,7 +37,7 @@ trainer:
   amp:
     enabled: true
   grad_clip: 1.0
-  checkpoint_interval_epochs: 10
+  checkpoint_interval_epochs: 9999  # disable periodic saves — only keep best + last
   resume: true
   reset_lr_on_resume: true    # restart cosine from base lr; T_max = remaining epochs
   out_dir: ${RUNS_ROOT}/autoencoder/finetune/dc_ae_f32c32_bs128
